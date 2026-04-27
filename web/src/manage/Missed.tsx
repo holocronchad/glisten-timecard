@@ -4,6 +4,7 @@ import { Check, X } from 'lucide-react';
 import { api, ApiError } from '../shared/api';
 import { useAuth } from './auth';
 import { ListSkeleton } from './Skeleton';
+import { useToast } from '../shared/toast';
 
 type MissedRequest = {
   id: number;
@@ -26,9 +27,9 @@ const TYPE_LABEL: Record<string, string> = {
 
 export default function Missed() {
   const { token } = useAuth();
+  const { toast } = useToast();
   const [rows, setRows] = useState<MissedRequest[] | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [err, setErr] = useState<string | null>(null);
 
   async function load() {
     const r = await api<{ requests: MissedRequest[] }>('/manage/missed', {
@@ -39,23 +40,34 @@ export default function Missed() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 30_000);
-    return () => clearInterval(t);
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') load();
+    }, 30_000);
+    function onVis() {
+      if (document.visibilityState === 'visible') load();
+    }
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVis);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   async function decide(id: number, decision: 'approve' | 'deny') {
     setBusyId(id);
-    setErr(null);
     try {
       await api(`/manage/missed/${id}/decide`, {
         method: 'POST',
         token: token ?? undefined,
         body: { decision },
       });
+      toast(
+        decision === 'approve' ? 'Approved — punch inserted.' : 'Request denied.',
+      );
       await load();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Action failed');
+      toast(e instanceof ApiError ? e.message : 'Action failed', 'error');
     } finally {
       setBusyId(null);
     }
@@ -69,8 +81,6 @@ export default function Missed() {
       <p className="text-creamSoft/40 text-sm mt-1">
         Pending requests from staff. Approve to insert the punch.
       </p>
-
-      {err && <p className="text-amber-300/80 text-sm mt-4">{err}</p>}
 
       <div className="mt-8 rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40">
         {!rows ? (

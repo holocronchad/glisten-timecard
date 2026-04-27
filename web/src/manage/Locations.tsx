@@ -4,6 +4,7 @@ import { MapPin, X, Crosshair } from 'lucide-react';
 import { api, ApiError } from '../shared/api';
 import { useAuth } from './auth';
 import { GridSkeleton } from './Skeleton';
+import { useToast } from '../shared/toast';
 
 type Location = {
   id: number;
@@ -121,6 +122,7 @@ function EditLocationModal({
   onSaved: () => void;
 }) {
   const { token } = useAuth();
+  const { toast } = useToast();
   const [name, setName] = useState(location.name);
   const [address, setAddress] = useState(location.address ?? '');
   const [lat, setLat] = useState(String(location.lat));
@@ -172,9 +174,12 @@ function EditLocationModal({
           reason,
         },
       });
+      toast('Office updated.');
       onSaved();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Save failed');
+      const msg = e instanceof ApiError ? e.message : 'Save failed';
+      setErr(msg);
+      toast(msg, 'error');
     } finally {
       setBusy(false);
     }

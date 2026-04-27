@@ -4,6 +4,7 @@ import { Plus, X } from 'lucide-react';
 import { api, ApiError } from '../shared/api';
 import { useAuth } from './auth';
 import { ListSkeleton } from './Skeleton';
+import { useToast } from '../shared/toast';
 
 type StaffRow = {
   id: number;
@@ -116,6 +117,7 @@ function AddStaffModal({
   onCreated: () => void;
 }) {
   const { token } = useAuth();
+  const { toast } = useToast();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('Front desk');
@@ -141,9 +143,12 @@ function AddStaffModal({
           is_manager: isManager,
         },
       });
+      toast(`${name} added.`);
       onCreated();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Failed');
+      const msg = e instanceof ApiError ? e.message : 'Failed';
+      setErr(msg);
+      toast(msg, 'error');
     } finally {
       setBusy(false);
     }

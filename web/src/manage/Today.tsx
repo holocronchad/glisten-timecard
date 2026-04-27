@@ -45,10 +45,17 @@ export default function Today() {
       }
     }
     load();
-    const t = setInterval(load, 30_000);
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') load();
+    }, 30_000);
+    function onVis() {
+      if (document.visibilityState === 'visible') load();
+    }
+    document.addEventListener('visibilitychange', onVis);
     return () => {
       cancelled = true;
       clearInterval(t);
+      document.removeEventListener('visibilitychange', onVis);
     };
   }, [token]);
 

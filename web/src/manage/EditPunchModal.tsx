@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { api, ApiError, PunchType } from '../shared/api';
 import { useAuth } from './auth';
+import { useToast } from '../shared/toast';
 
 type Props = {
   punch: {
@@ -31,6 +32,7 @@ function isoToLocalAz(iso: string): string {
 
 export default function EditPunchModal({ punch, onClose, onSaved }: Props) {
   const { token } = useAuth();
+  const { toast } = useToast();
   const [type, setType] = useState<PunchType>(punch.type as PunchType);
   const [when, setWhen] = useState(isoToLocalAz(punch.ts));
   const [flagged, setFlagged] = useState(punch.flagged);
@@ -48,9 +50,12 @@ export default function EditPunchModal({ punch, onClose, onSaved }: Props) {
         token: token ?? undefined,
         body: { ts, type, flagged, reason },
       });
+      toast('Punch updated.');
       onSaved();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Save failed');
+      const msg = e instanceof ApiError ? e.message : 'Save failed';
+      setErr(msg);
+      toast(msg, 'error');
     } finally {
       setBusy(false);
     }
