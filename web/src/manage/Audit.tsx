@@ -35,24 +35,49 @@ const ACTION_ICON: Record<string, any> = {
   auto_close: Clock,
 };
 
+const PAGE_SIZE = 50;
+
 export default function Audit() {
   const { token } = useAuth();
   const [rows, setRows] = useState<AuditEntry[] | null>(null);
   const [filter, setFilter] = useState<AuditEntry['resource_type'] | 'all'>('all');
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [exhausted, setExhausted] = useState(false);
+
+  function buildPath(before?: string) {
+    const params = new URLSearchParams();
+    if (filter !== 'all') params.set('resource_type', filter);
+    params.set('limit', String(PAGE_SIZE));
+    if (before) params.set('before', before);
+    return `/manage/audit?${params.toString()}`;
+  }
 
   async function load() {
-    const path =
-      filter === 'all'
-        ? '/manage/audit'
-        : `/manage/audit?resource_type=${filter}`;
-    const r = await api<{ entries: AuditEntry[] }>(path, {
+    const r = await api<{ entries: AuditEntry[] }>(buildPath(), {
       token: token ?? undefined,
     });
     setRows(r.entries);
+    setExhausted(r.entries.length < PAGE_SIZE);
+  }
+
+  async function loadMore() {
+    if (!rows || rows.length === 0 || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const last = rows[rows.length - 1];
+      const r = await api<{ entries: AuditEntry[] }>(buildPath(last.ts), {
+        token: token ?? undefined,
+      });
+      setRows([...rows, ...r.entries]);
+      setExhausted(r.entries.length < PAGE_SIZE);
+    } finally {
+      setLoadingMore(false);
+    }
   }
 
   useEffect(() => {
+    setExhausted(false);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, token]);
@@ -90,7 +115,7 @@ export default function Audit() {
         </select>
       </div>
 
-      <div className="mt-8 rounded-3xl border border-creamSoft/10 bg-graphite/40 divide-y divide-creamSoft/5">
+      <div className="mt-8 rounded-3xl border border-creamSoft/10 bg-graphite/40 divide-y divide-creamSoft/5 overflow-hidden">
         {!rows ? (
           <ListSkeleton rows={6} />
         ) : rows.length === 0 ? (
@@ -157,6 +182,18 @@ export default function Audit() {
           })
         )}
       </div>
+
+      {rows && rows.length > 0 && !exhausted && (
+        <div className="mt-4 flex justify-center">
+          <button
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="rounded-full border border-creamSoft/15 hover:bg-creamSoft/5 text-creamSoft/70 px-5 py-2 text-sm tracking-tight disabled:opacity-50"
+          >
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

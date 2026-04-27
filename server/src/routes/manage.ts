@@ -387,6 +387,48 @@ router.patch('/punches/:id', async (req, res) => {
   res.json({ punch: result.punch });
 });
 
+// ── DELETE /manage/punches/:id ─────────────────────────────────────────────
+// Removes a punch entirely. Records the full before-state in audit_log so
+// the row is recoverable from the JSON snapshot.
+router.delete('/punches/:id', async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (Number.isNaN(id)) {
+    res.status(400).json({ error: 'Bad id' });
+    return;
+  }
+  const reason = (req.body?.reason ?? '') as string;
+  if (!reason || reason.trim().length < 3) {
+    res.status(400).json({ error: 'A reason is required (min 3 chars)' });
+    return;
+  }
+
+  type Result =
+    | { ok: true }
+    | { ok: false; status: number; error: string };
+  const result = await withTransaction<Result>(async (client) => {
+    const before = await client.query(
+      `SELECT * FROM timeclock.punches WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    if (before.rowCount === 0) {
+      return { ok: false, status: 404, error: 'Not found' };
+    }
+    await client.query(`DELETE FROM timeclock.punches WHERE id = $1`, [id]);
+    await client.query(
+      `INSERT INTO timeclock.audit_log
+         (actor_user_id, resource_type, resource_id, action, before_state, reason)
+       VALUES ($1, 'punch', $2, 'delete', $3, $4)`,
+      [req.auth!.user_id, id, JSON.stringify(before.rows[0]), reason],
+    );
+    return { ok: true };
+  });
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true });
+});
+
 // ── POST /manage/punches ───────────────────────────────────────────────────
 // Insert a missing punch (manager edit).
 const insertPunchSchema = z.object({

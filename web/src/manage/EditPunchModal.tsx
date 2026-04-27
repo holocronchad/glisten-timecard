@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { X } from 'lucide-react';
+import { X, Trash2 } from 'lucide-react';
 import { api, ApiError, PunchType } from '../shared/api';
 import { useAuth } from './auth';
 import { useToast } from '../shared/toast';
@@ -54,6 +54,37 @@ export default function EditPunchModal({ punch, onClose, onSaved }: Props) {
       onSaved();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : 'Save failed';
+      setErr(msg);
+      toast(msg, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (reason.trim().length < 3) {
+      setErr('Add a reason before deleting.');
+      return;
+    }
+    if (
+      !window.confirm(
+        `Delete this ${punch.type.replace('_', ' ')} punch for ${punch.user_name}? The before-state is recorded in the audit log so it can be restored from there if needed.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await api(`/manage/punches/${punch.id}`, {
+        method: 'DELETE',
+        token: token ?? undefined,
+        body: { reason },
+      });
+      toast('Punch deleted.');
+      onSaved();
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Delete failed';
       setErr(msg);
       toast(msg, 'error');
     } finally {
@@ -154,13 +185,23 @@ export default function EditPunchModal({ punch, onClose, onSaved }: Props) {
 
         {err && <p className="text-amber-300/80 text-sm mt-3">{err}</p>}
 
-        <button
-          onClick={save}
-          disabled={busy || reason.trim().length < 3}
-          className="mt-5 w-full rounded-full bg-cream text-ink py-3 tracking-tight disabled:opacity-50"
-        >
-          {busy ? 'Saving…' : 'Save change'}
-        </button>
+        <div className="flex gap-2 mt-5">
+          <button
+            onClick={remove}
+            disabled={busy || reason.trim().length < 3}
+            className="inline-flex items-center justify-center gap-1.5 rounded-full border border-creamSoft/15 hover:bg-amber-300/10 hover:border-amber-300/30 text-amber-300/80 px-4 py-3 text-sm tracking-tight disabled:opacity-50"
+            title="Delete this punch"
+          >
+            <Trash2 size={14} />
+          </button>
+          <button
+            onClick={save}
+            disabled={busy || reason.trim().length < 3}
+            className="flex-1 rounded-full bg-cream text-ink py-3 tracking-tight disabled:opacity-50"
+          >
+            {busy ? 'Saving…' : 'Save change'}
+          </button>
+        </div>
       </motion.div>
     </motion.div>
   );

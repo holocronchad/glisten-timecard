@@ -16,9 +16,34 @@ export function buildApp() {
   // Trust the DO load balancer for x-forwarded-for
   app.set('trust proxy', 1);
 
-  app.use(helmet({
-    contentSecurityPolicy: false, // managed at the LB / Cloudflare layer
-  }));
+  // CSP: tight enough to mean something, loose enough for Vite-built React + Google Fonts.
+  // - default-src 'self': everything must come from our origin unless overridden
+  // - script-src 'self': bundled chunks live at /assets/, no inline scripts
+  // - style-src 'self' + Google Fonts (and 'unsafe-inline' for Tailwind's runtime
+  //   utility classes that get inlined into <style> blocks during build)
+  // - font-src self + Google Fonts CDN
+  // - img/data: data URIs are how the noise-overlay SVG ships
+  // - connect-src self for fetch(), 'self' covers the same-origin /kiosk and /manage APIs
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+          fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+          imgSrc: ["'self'", 'data:'],
+          connectSrc: ["'self'"],
+          objectSrc: ["'none'"],
+          frameAncestors: ["'none'"],
+          baseUri: ["'self'"],
+          formAction: ["'self'"],
+        },
+      },
+      crossOriginEmbedderPolicy: false, // would break Google Fonts
+    }),
+  );
   app.use(cors({
     origin: config.isProd ? [
       'https://timecard.glistendental.com',
