@@ -1,5 +1,7 @@
 # Glisten Timecard
 
+[![ci](https://github.com/holocronchad/glisten-timecard/actions/workflows/ci.yml/badge.svg)](https://github.com/holocronchad/glisten-timecard/actions/workflows/ci.yml)
+
 A time-clock app built for Glisten Dental — a 3-office practice in
 Arizona. Cinematic kiosk surface for staff, utility-grade dashboard for
 managers. Runs as a single Node process alongside the rest of the
