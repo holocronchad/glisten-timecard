@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Flag } from 'lucide-react';
+import { AnimatePresence } from 'framer-motion';
+import { Flag, Pencil } from 'lucide-react';
 import { api } from '../shared/api';
 import { useAuth } from './auth';
 import { formatTime } from '../shared/geo';
+import EditPunchModal from './EditPunchModal';
 
 type PunchRow = {
   id: number;
@@ -31,24 +33,21 @@ export default function Punches() {
   const [rows, setRows] = useState<PunchRow[]>([]);
   const [flaggedOnly, setFlaggedOnly] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<PunchRow | null>(null);
+
+  async function load() {
+    setLoading(true);
+    const r = await api<{ punches: PunchRow[] }>(
+      `/manage/punches${flaggedOnly ? '?flagged=true' : ''}`,
+      { token: token ?? undefined },
+    );
+    setRows(r.punches);
+    setLoading(false);
+  }
 
   useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
-      const r = await api<{ punches: PunchRow[] }>(
-        `/manage/punches${flaggedOnly ? '?flagged=true' : ''}`,
-        { token: token ?? undefined },
-      );
-      if (!cancelled) {
-        setRows(r.punches);
-        setLoading(false);
-      }
-    }
     load();
-    return () => {
-      cancelled = true;
-    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flaggedOnly, token]);
 
   return (
@@ -90,7 +89,11 @@ export default function Punches() {
             </thead>
             <tbody className="divide-y divide-creamSoft/5">
               {rows.map((p) => (
-                <tr key={p.id} className="hover:bg-creamSoft/5">
+                <tr
+                  key={p.id}
+                  onClick={() => setEditing(p)}
+                  className="hover:bg-creamSoft/5 cursor-pointer group"
+                >
                   <td className="px-5 py-3 text-creamSoft tabular-nums whitespace-nowrap">
                     {dateLabel(p.ts)} · {formatTime(p.ts)}
                   </td>
@@ -102,10 +105,14 @@ export default function Punches() {
                   <td className="px-5 py-3 text-creamSoft/40 hidden sm:table-cell">
                     {p.source}
                   </td>
-                  <td className="px-5 py-3">
-                    {p.flagged && (
+                  <td className="px-5 py-3 text-right">
+                    {p.flagged ? (
                       <span className="inline-flex items-center gap-1 text-amber-300/80 text-xs">
                         <Flag size={12} /> {p.flag_reason ?? 'flagged'}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-creamSoft/30 text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Pencil size={12} /> Edit
                       </span>
                     )}
                   </td>
@@ -115,6 +122,19 @@ export default function Punches() {
           </table>
         )}
       </div>
+
+      <AnimatePresence>
+        {editing && (
+          <EditPunchModal
+            punch={editing}
+            onClose={() => setEditing(null)}
+            onSaved={() => {
+              setEditing(null);
+              load();
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
