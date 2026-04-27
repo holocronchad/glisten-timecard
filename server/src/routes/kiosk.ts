@@ -164,6 +164,65 @@ function messageFor(type: PunchType, name: string): string {
   }
 }
 
+// ── POST /kiosk/missed-punch ───────────────────────────────────────────────
+// Employee submits "I forgot to clock in/out at <time>" — manager approves
+// or denies in /manage/missed. PIN-only, no geofence required.
+const missedSchema = z.object({
+  pin: z.string().regex(/^\d{4}$/),
+  type: z.enum(['clock_in', 'clock_out', 'lunch_start', 'lunch_end']),
+  proposed_ts: z.string().datetime(),
+  reason: z.string().min(3).max(500),
+});
+
+router.post('/missed-punch', async (req, res) => {
+  const parsed = missedSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Bad request', issues: parsed.error.issues });
+    return;
+  }
+  const { pin, type, proposed_ts, reason } = parsed.data;
+  const result = await findUserByPin(pin);
+  if (!result.ok) {
+    res.status(401).json({ error: result.reason === 'locked' ? 'Locked' : 'Invalid PIN' });
+    return;
+  }
+  if (!result.user.track_hours) {
+    res.status(403).json({ error: 'This account does not punch the clock' });
+    return;
+  }
+
+  const ts = new Date(proposed_ts);
+  const now = new Date();
+  if (ts > now) {
+    res.status(400).json({ error: 'Proposed time cannot be in the future' });
+    return;
+  }
+  if (now.getTime() - ts.getTime() > 14 * 24 * 60 * 60_000) {
+    res.status(400).json({ error: 'Cannot request punches older than 14 days' });
+    return;
+  }
+
+  const date = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Phoenix',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(ts);
+
+  const { rows } = await query(
+    `INSERT INTO timeclock.missed_punch_requests
+       (user_id, date, type, proposed_ts, reason)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, status, created_at`,
+    [result.user.id, date, type, ts, reason],
+  );
+
+  res.status(201).json({
+    request: rows[0],
+    message: `Request sent. A manager will review it shortly.`,
+  });
+});
+
 // ── GET /kiosk/me ──────────────────────────────────────────────────────────
 // PIN in query for read-only "view my hours" — no state change, no geofence.
 // Used by the personal-view screen.

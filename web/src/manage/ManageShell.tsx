@@ -4,6 +4,7 @@ import { useAuth } from './auth';
 
 const TABS = [
   { to: 'today', label: 'Today' },
+  { to: 'missed', label: 'Missed' },
   { to: 'period', label: 'Pay period' },
   { to: 'punches', label: 'Punches' },
   { to: 'staff', label: 'Staff', ownerOnly: true },

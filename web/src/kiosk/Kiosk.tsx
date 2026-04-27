@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import PinPad from './PinPad';
 import NameReveal from './NameReveal';
 import Confirmation from './Confirmation';
+import MissedPunchModal from './MissedPunchModal';
 import { api, ApiError, LookupResponse, PunchResponse, PunchType } from '../shared/api';
 import { getCurrentPosition, greetingForHour } from '../shared/geo';
 
@@ -28,9 +29,14 @@ export default function Kiosk() {
     return () => clearInterval(t);
   }, []);
 
+  const [missedOpen, setMissedOpen] = useState(false);
+  const [missedConfirm, setMissedConfirm] = useState(false);
+
   const reset = useCallback(() => {
     setPhase({ kind: 'pin' });
     setError(null);
+    setMissedOpen(false);
+    setMissedConfirm(false);
   }, []);
 
   useEffect(() => {
@@ -137,6 +143,7 @@ export default function Kiosk() {
                   allowed={phase.lookup.allowed_actions}
                   onChoose={handlePunch}
                   onCancel={reset}
+                  onMissedPunch={() => setMissedOpen(true)}
                   geofenceWarning={phase.lookup.location === null}
                 />
               </motion.div>
@@ -179,6 +186,36 @@ export default function Kiosk() {
           Manager
         </a>
       </footer>
+
+      <AnimatePresence>
+        {missedOpen && phase.kind === 'name' && (
+          <MissedPunchModal
+            pin={phase.pin}
+            onClose={() => setMissedOpen(false)}
+            onSubmitted={() => {
+              setMissedOpen(false);
+              setMissedConfirm(true);
+              setTimeout(() => {
+                setMissedConfirm(false);
+                reset();
+              }, 2400);
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {missedConfirm && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-6 left-1/2 -translate-x-1/2 bg-cream text-ink rounded-full px-5 py-2.5 text-sm tracking-tight shadow-2xl z-40"
+          >
+            Request sent — a manager will review it.
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

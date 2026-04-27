@@ -1,0 +1,19 @@
+{
+  "name": "Glisten Timecard",
+  "short_name": "Glisten",
+  "description": "Time-clock kiosk for Glisten Dental.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "portrait",
+  "background_color": "#0A0A0A",
+  "theme_color": "#0A0A0A",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ type Props = {
   allowed: PunchType[];
   onChoose: (type: PunchType) => void;
   onCancel: () => void;
+  onMissedPunch: () => void;
   geofenceWarning?: boolean;
 };
 
@@ -24,6 +25,7 @@ export default function NameReveal({
   allowed,
   onChoose,
   onCancel,
+  onMissedPunch,
   geofenceWarning,
 }: Props) {
   const first = name.split(' ')[0];
@@ -92,13 +94,22 @@ export default function NameReveal({
         })}
       </div>
 
-      <button
-        type="button"
-        onClick={onCancel}
-        className="text-creamSoft/40 hover:text-creamSoft/70 text-sm tracking-tight transition-colors"
-      >
-        That's not me — cancel
-      </button>
+      <div className="flex flex-col items-center gap-3 mt-2">
+        <button
+          type="button"
+          onClick={onMissedPunch}
+          className="text-creamSoft/60 hover:text-creamSoft text-sm tracking-tight transition-colors underline-offset-4 hover:underline"
+        >
+          I forgot to punch earlier
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="text-creamSoft/40 hover:text-creamSoft/70 text-sm tracking-tight transition-colors"
+        >
+          That's not me — cancel
+        </button>
+      </div>
     </div>
   );
 }

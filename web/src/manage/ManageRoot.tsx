@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './auth';
 import Login from './Login';
 import ManageShell from './ManageShell';
 import Today from './Today';
+import Missed from './Missed';
 import Period from './Period';
 import Punches from './Punches';
 import Staff from './Staff';
@@ -24,6 +25,7 @@ function ManageRoutes() {
         <Route element={<ManageShell />}>
           <Route index element={<Navigate to="today" replace />} />
           <Route path="today" element={<Today />} />
+          <Route path="missed" element={<Missed />} />
           <Route path="period" element={<Period />} />
           <Route path="punches" element={<Punches />} />
           <Route path="staff" element={<Staff />} />
