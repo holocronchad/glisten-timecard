@@ -185,22 +185,26 @@ bash scripts/smoke.sh https://timecard.glistendental.com
 
 Expected output: all green checks.
 
-Manual sanity check:
+Manual sanity check from the **front-desk PC inside an office**:
 
-1. Open `https://timecard.glistendental.com` on iPad
-2. Tap PIN `1111` → "Good morning, Annie"
-3. From an iPad **physically inside the office**: tap "Clock in" → success
-4. From outside the office: tap "Clock in" → "You're not at a Glisten office"
+1. Open `https://timecard.glistendental.com` in Chrome
+2. Click PIN `1111` → "Good morning, Annie"
+3. Click "Clock in" → success
+4. Repeat from your laptop **off-site** → "You're not at a Glisten office"
 5. Open `/manage`, log in as Anas → see Annie's punch under Today
 
 ---
 
-## 10. Add to Anas's iPhone home screen
+## 10. Pin to the front-desk PC
 
-On the iPad in each office:
-1. Safari → `https://timecard.glistendental.com`
-2. Share → Add to Home Screen → "Glisten"
-3. Open from home screen → kiosk goes fullscreen
+On each office's front-desk computer:
+1. Chrome → `https://timecard.glistendental.com`
+2. Three-dot menu → Cast/save/share → **Install Glisten Timecard** (or use the install icon in the URL bar)
+3. The PWA window opens fullscreen, no browser chrome — same effect as a kiosk app
+4. Pin the resulting shortcut to the desktop / taskbar so the front desk launches it without typing
+
+For employees who want it on their phone, point them at `/me` —
+they Add to Home Screen from their browser's share sheet.
 
 ---
 
@@ -210,7 +214,7 @@ On the iPad in each office:
 |---|---|
 | `pm2 logs` shows `Missing required env var: JWT_SECRET` | `.env` not loaded — `pm2 restart glisten-timecard --update-env` after fixing |
 | `/health` returns 200 but kiosk says "Connection failed" | nginx proxy block missing — re-check step 7 |
-| All punches flagged "outside office" | Verify lat/lng with `SELECT * FROM timeclock.locations`; bump `geofence_m` if iPad GPS is jittery |
+| All punches flagged "outside office" | Verify lat/lng with `SELECT * FROM timeclock.locations`; bump `geofence_m` if browser GPS is jittery (front-desk PCs without GPS hardware fall back to WiFi positioning) |
 | Auto-close cron firing twice | More than one PM2 instance — `ecosystem.config.js` should be `instances: 1, exec_mode: 'fork'` |
 | Manager login 401 with correct password | Owner record missing `password_hash` — re-run seed with `SEED_*_PASSWORD` set |
 

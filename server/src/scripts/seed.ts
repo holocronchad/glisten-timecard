@@ -2,8 +2,8 @@
 // Anas + Dr. Dawood as owners. Idempotent: re-running is safe.
 //
 // Office coordinates from the US Census geocoder against the public street
-// addresses. Geofence radius is 150m to absorb GPS jitter from iPad WiFi
-// positioning + indoor multipath.
+// addresses. Geofence radius is 150m to absorb GPS jitter — front-desk PCs
+// fall back to WiFi positioning, which can drift up to ~100m indoors.
 
 import { hashPin } from '../auth/pin';
 import bcrypt from 'bcrypt';

@@ -11,14 +11,15 @@ practice's infrastructure, isolated by Postgres schema.
 
 **Kiosk** — `/`
 4-digit PIN → name reveal in Instrument Serif italic → action button
-(Clock in / out / lunch start / end) → confirmation. iPads at each
-office go into fullscreen with the PWA install. Geofenced to the office
-GPS coordinates, with a "I forgot to punch earlier" escape hatch that
-routes to the manager queue.
+(Clock in / out / lunch start / end) → confirmation. Runs on the
+front-desk PC in fullscreen Chrome at each office. Geofenced to the
+office GPS coordinates, with a "I forgot to punch earlier" escape hatch
+that routes to the manager queue.
 
 **Personal** — `/me`
-Employee's own phone. PIN → 14-day punch history, weekly + period
-totals, per-day breakdown. Read-only.
+Employee's own phone — also doubles as a punch surface when staff aren't
+at the front desk. PIN → 14-day punch history, weekly + period totals,
+per-day breakdown. Read-only.
 
 **Manager** — `/manage`
 Email + password. Tabs: Today (live status), Missed (approve/deny

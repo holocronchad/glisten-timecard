@@ -1,4 +1,4 @@
-// Kiosk endpoints — used by the kiosk UI on iPads + desktops + personal phones.
+// Kiosk endpoints — used by the front-desk PC kiosk + personal phones.
 // PIN-only auth, no persistent session: every action submits PIN + lat/lng.
 
 import { Router } from 'express';
