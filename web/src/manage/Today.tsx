@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../shared/api';
 import { useAuth } from './auth';
 import { formatTime } from '../shared/geo';
+import { ListSkeleton } from './Skeleton';
 
 type TodayResponse = {
   today: string;
@@ -62,7 +63,7 @@ export default function Today() {
 
       <div className="mt-8 rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40">
         {loading && !data ? (
-          <div className="p-10 text-creamSoft/40 text-sm">Loading…</div>
+          <ListSkeleton rows={6} />
         ) : !data || data.employees.length === 0 ? (
           <div className="p-10 text-creamSoft/40 text-sm">No active staff.</div>
         ) : (

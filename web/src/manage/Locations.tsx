@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { MapPin, X, Crosshair } from 'lucide-react';
 import { api, ApiError } from '../shared/api';
 import { useAuth } from './auth';
+import { GridSkeleton } from './Skeleton';
 
 type Location = {
   id: number;
@@ -45,7 +46,7 @@ export default function Locations() {
 
       <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
         {!rows
-          ? null
+          ? <GridSkeleton count={3} className="col-span-full grid grid-cols-1 md:grid-cols-3" />
           : rows.map((l, i) => (
               <motion.button
                 key={l.id}

@@ -5,6 +5,7 @@ import { api } from '../shared/api';
 import { useAuth } from './auth';
 import { formatTime } from '../shared/geo';
 import EditPunchModal from './EditPunchModal';
+import { ListSkeleton } from './Skeleton';
 
 type PunchRow = {
   id: number;
@@ -72,7 +73,7 @@ export default function Punches() {
 
       <div className="mt-8 rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40">
         {loading ? (
-          <div className="p-10 text-creamSoft/40 text-sm">Loading…</div>
+          <ListSkeleton rows={8} />
         ) : rows.length === 0 ? (
           <div className="p-10 text-creamSoft/40 text-sm">No punches.</div>
         ) : (

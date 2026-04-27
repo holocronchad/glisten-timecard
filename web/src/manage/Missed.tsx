@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Check, X } from 'lucide-react';
 import { api, ApiError } from '../shared/api';
 import { useAuth } from './auth';
+import { ListSkeleton } from './Skeleton';
 
 type MissedRequest = {
   id: number;
@@ -73,7 +74,7 @@ export default function Missed() {
 
       <div className="mt-8 rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40">
         {!rows ? (
-          <div className="p-10 text-creamSoft/40 text-sm">Loading…</div>
+          <ListSkeleton rows={4} />
         ) : rows.length === 0 ? (
           <div className="p-10 text-creamSoft/40 text-sm">
             All caught up — no pending requests.

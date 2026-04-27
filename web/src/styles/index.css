@@ -45,4 +45,20 @@ body {
   .text-balance {
     text-wrap: balance;
   }
+
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      rgba(225, 224, 204, 0.04) 0%,
+      rgba(225, 224, 204, 0.10) 50%,
+      rgba(225, 224, 204, 0.04) 100%
+    );
+    background-size: 220% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+
+  @keyframes shimmer {
+    0% { background-position: 220% 0; }
+    100% { background-position: -120% 0; }
+  }
 }

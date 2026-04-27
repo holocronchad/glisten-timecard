@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, X } from 'lucide-react';
 import { api, ApiError } from '../shared/api';
 import { useAuth } from './auth';
+import { ListSkeleton } from './Skeleton';
 
 type StaffRow = {
   id: number;
@@ -56,7 +57,7 @@ export default function Staff() {
 
       <div className="mt-8 rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40 divide-y divide-creamSoft/5">
         {loading ? (
-          <div className="p-10 text-creamSoft/40 text-sm">Loading…</div>
+          <ListSkeleton rows={5} />
         ) : (
           rows.map((r) => (
             <div key={r.id} className="flex items-center gap-4 p-5">

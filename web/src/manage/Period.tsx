@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { api } from '../shared/api';
 import { useAuth } from './auth';
+import { ListSkeleton } from './Skeleton';
 
 type PeriodResponse = {
   period: { index: number; start: string; end: string; label: string };
@@ -92,7 +93,7 @@ export default function Period() {
 
       <div className="mt-8 rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40 divide-y divide-creamSoft/5">
         {!data ? (
-          <div className="p-10 text-creamSoft/40 text-sm">Loading…</div>
+          <ListSkeleton rows={6} />
         ) : data.employees.length === 0 ? (
           <div className="p-10 text-creamSoft/40 text-sm">No active staff.</div>
         ) : (

@@ -18,6 +18,8 @@ export class ApiError extends Error {
   }
 }
 
+export const AUTH_EXPIRED_EVENT = 'glisten:auth-expired';
+
 export async function api<T>(path: string, opts: FetchOpts = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: opts.method ?? 'GET',
@@ -34,6 +36,12 @@ export async function api<T>(path: string, opts: FetchOpts = {}): Promise<T> {
   if (!res.ok) {
     const msg = (data && (data.message || data.error)) || res.statusText;
     const code = data && data.error;
+    // Manager-scoped 401 → bubble up so the auth provider can clear and
+    // route to login. Kiosk/me routes don't carry a token, so this won't
+    // fire on PIN failures.
+    if (res.status === 401 && opts.token) {
+      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+    }
     throw new ApiError(res.status, msg, code, data);
   }
   return data as T;

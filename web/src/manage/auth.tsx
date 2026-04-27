@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { AUTH_EXPIRED_EVENT } from '../shared/api';
 
 type ManagerUser = {
   id: number;
@@ -44,6 +45,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     localStorage.removeItem(STORAGE_KEY);
   }
+
+  useEffect(() => {
+    const handler = () => clear();
+    window.addEventListener(AUTH_EXPIRED_EVENT, handler);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handler);
+  }, []);
 
   return (
     <Ctx.Provider value={{ token, user, setSession, clear }}>{children}</Ctx.Provider>

@@ -6,6 +6,7 @@ import Confirmation from './Confirmation';
 import MissedPunchModal from './MissedPunchModal';
 import { api, ApiError, LookupResponse, PunchResponse, PunchType } from '../shared/api';
 import { getCurrentPosition, greetingForHour } from '../shared/geo';
+import { vibrateError } from '../shared/feedback';
 
 type Phase =
   | { kind: 'pin' }
@@ -72,6 +73,7 @@ export default function Kiosk() {
           : 'Connection failed.';
       setError(msg);
       setShake((s) => s + 1);
+      vibrateError();
       setPhase({ kind: 'pin' });
     }
   }

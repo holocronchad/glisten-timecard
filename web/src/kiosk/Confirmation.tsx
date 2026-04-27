@@ -1,7 +1,9 @@
+import { useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Check } from 'lucide-react';
 import { PunchType } from '../shared/api';
 import { formatTime } from '../shared/geo';
+import { playPunchSuccess, vibrateSuccess } from '../shared/feedback';
 
 const VERB: Record<PunchType, string> = {
   clock_in: 'Clocked in',
@@ -19,6 +21,12 @@ type Props = {
 
 export default function Confirmation({ type, ts, name, greeting }: Props) {
   const first = name.split(' ')[0];
+
+  useEffect(() => {
+    playPunchSuccess();
+    vibrateSuccess();
+  }, []);
+
   return (
     <div className="flex flex-col items-center gap-8 text-center">
       <motion.div

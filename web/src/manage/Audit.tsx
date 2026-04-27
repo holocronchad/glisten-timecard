@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Pencil, Plus, Trash2, Check, X as XIcon, Clock } from 'lucide-react';
 import { api } from '../shared/api';
 import { useAuth } from './auth';
+import { ListSkeleton } from './Skeleton';
 
 type AuditEntry = {
   id: number;
@@ -91,7 +92,7 @@ export default function Audit() {
 
       <div className="mt-8 rounded-3xl border border-creamSoft/10 bg-graphite/40 divide-y divide-creamSoft/5">
         {!rows ? (
-          <div className="p-10 text-creamSoft/40 text-sm">Loading…</div>
+          <ListSkeleton rows={6} />
         ) : rows.length === 0 ? (
           <div className="p-10 text-creamSoft/40 text-sm">No entries.</div>
         ) : (
