@@ -59,14 +59,41 @@ export default function Today() {
     };
   }, [token]);
 
+  const onClock = data ? data.employees.filter((e) => e.status === 'on_clock').length : 0;
+  const onLunch = data ? data.employees.filter((e) => e.status === 'on_lunch').length : 0;
+  const total = data ? data.employees.length : 0;
+
   return (
     <div>
-      <h1 className="text-[40px] leading-[1.05] tracking-tight font-light">
-        <span className="font-serif italic text-cream">Today</span>
-      </h1>
-      <p className="text-creamSoft/40 text-sm mt-1">
-        Live status — updates every 30 seconds.
-      </p>
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+        <div>
+          <h1 className="text-[40px] leading-[1.05] tracking-tight font-light">
+            <span className="font-serif italic text-cream">Today</span>
+          </h1>
+          <p className="text-creamSoft/40 text-sm mt-1">
+            Live status — updates every 30 seconds.
+          </p>
+        </div>
+        {data && (
+          <div className="flex items-center gap-4 text-sm">
+            <span className="text-creamSoft/60">
+              <span className="text-creamSoft tabular-nums tracking-tight">
+                {onClock}
+              </span>{' '}
+              on the clock
+            </span>
+            {onLunch > 0 && (
+              <span className="text-creamSoft/60">
+                <span className="text-creamSoft tabular-nums tracking-tight">
+                  {onLunch}
+                </span>{' '}
+                at lunch
+              </span>
+            )}
+            <span className="text-creamSoft/30 tabular-nums">/ {total}</span>
+          </div>
+        )}
+      </div>
 
       <div className="mt-8 rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40">
         {loading && !data ? (

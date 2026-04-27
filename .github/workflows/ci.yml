@@ -24,5 +24,8 @@ jobs:
       - name: Build server + web
         run: npm run build
 
-      - name: Run unit tests
+      - name: Run server tests
         run: npm --workspace server test
+
+      - name: Run web tests
+        run: npm --workspace web test

@@ -22,13 +22,26 @@ export default function Kiosk() {
   const [shake, setShake] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [gpsState, setGpsState] = useState<'pending' | 'ready' | 'denied'>('pending');
   const [now, setNow] = useState(new Date());
 
+  const requestGps = useCallback(() => {
+    setGpsState('pending');
+    getCurrentPosition().then((c) => {
+      if (c) {
+        setCoords(c);
+        setGpsState('ready');
+      } else {
+        setGpsState('denied');
+      }
+    });
+  }, []);
+
   useEffect(() => {
-    getCurrentPosition().then(setCoords);
+    requestGps();
     const t = setInterval(() => setNow(new Date()), 30_000);
     return () => clearInterval(t);
-  }, []);
+  }, [requestGps]);
 
   const [missedOpen, setMissedOpen] = useState(false);
   const [missedConfirm, setMissedConfirm] = useState(false);
@@ -122,6 +135,15 @@ export default function Kiosk() {
                 className="flex flex-col items-center gap-10"
               >
                 <Hero />
+                {gpsState === 'denied' && (
+                  <button
+                    type="button"
+                    onClick={requestGps}
+                    className="rounded-full bg-amber-300/95 text-ink px-4 py-2 text-sm tracking-tight"
+                  >
+                    Tap to allow location — required to punch
+                  </button>
+                )}
                 <PinPad
                   onSubmit={handlePin}
                   shake={shake > 0 ? shake : undefined}
