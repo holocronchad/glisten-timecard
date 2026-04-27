@@ -756,4 +756,43 @@ router.post('/auto-close', requireOwner, async (_req, res) => {
   res.json({ closed });
 });
 
+// ── GET /manage/audit (owner) ──────────────────────────────────────────────
+// Paginated audit log. Optional ?resource_type=punch|user|location|missed_request
+// and ?limit=50 (max 200).
+router.get('/audit', requireOwner, async (req, res) => {
+  const resourceType = req.query.resource_type as string | undefined;
+  const limit = Math.min(
+    parseInt(String(req.query.limit ?? '50'), 10) || 50,
+    200,
+  );
+  const before = req.query.before
+    ? new Date(String(req.query.before))
+    : null;
+
+  const params: any[] = [];
+  const where: string[] = [];
+  if (resourceType) {
+    params.push(resourceType);
+    where.push(`a.resource_type = $${params.length}`);
+  }
+  if (before && !Number.isNaN(before.getTime())) {
+    params.push(before);
+    where.push(`a.ts < $${params.length}`);
+  }
+  params.push(limit);
+
+  const { rows } = await query(
+    `SELECT a.id, a.actor_user_id, u.name AS actor_name,
+            a.resource_type, a.resource_id, a.action,
+            a.before_state, a.after_state, a.reason, a.ts
+     FROM timeclock.audit_log a
+     LEFT JOIN timeclock.users u ON u.id = a.actor_user_id
+     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+     ORDER BY a.ts DESC
+     LIMIT $${params.length}`,
+    params,
+  );
+  res.json({ entries: rows });
+});
+
 export default router;

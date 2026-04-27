@@ -10,6 +10,7 @@ import Punches from './Punches';
 import Staff from './Staff';
 import Locations from './Locations';
 import EmployeeDetail from './EmployeeDetail';
+import Audit from './Audit';
 
 export default function ManageRoot() {
   return (
@@ -33,6 +34,7 @@ function ManageRoutes() {
           <Route path="staff" element={<Staff />} />
           <Route path="offices" element={<Locations />} />
           <Route path="employees/:id" element={<EmployeeDetail />} />
+          <Route path="audit" element={<Audit />} />
         </Route>
       </Route>
     </Routes>
