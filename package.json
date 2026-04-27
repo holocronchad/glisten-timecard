@@ -1,0 +1,27 @@
+{
+  "name": "glisten-timecard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Time-clock app for Glisten Dental — kiosk + manager dashboard. Runs on Holocron infrastructure, isolated by Postgres schema and PM2 process.",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm --workspace server run dev",
+    "dev:web": "npm --workspace web run dev",
+    "build": "npm --workspace server run build && npm --workspace web run build",
+    "build:server": "npm --workspace server run build",
+    "build:web": "npm --workspace web run build",
+    "start": "npm --workspace server run start",
+    "lint": "echo 'lint pending'",
+    "migrate": "node server/dist/scripts/migrate.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
