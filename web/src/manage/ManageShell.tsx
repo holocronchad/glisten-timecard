@@ -8,6 +8,7 @@ const TABS = [
   { to: 'period', label: 'Pay period' },
   { to: 'punches', label: 'Punches' },
   { to: 'staff', label: 'Staff', ownerOnly: true },
+  { to: 'offices', label: 'Offices', ownerOnly: true },
 ];
 
 export default function ManageShell({ children }: { children?: ReactNode }) {

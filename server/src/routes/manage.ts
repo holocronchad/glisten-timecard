@@ -255,6 +255,59 @@ router.get('/punches', async (req, res) => {
   res.json({ punches: rows });
 });
 
+// ── GET /manage/employees/:id ──────────────────────────────────────────────
+// Drill-down for one employee: profile + punches + segments inside an
+// optional date range (defaults to current pay period).
+router.get('/employees/:id', async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (Number.isNaN(id)) {
+    res.status(400).json({ error: 'Bad id' });
+    return;
+  }
+  const idxRaw = req.query.index as string | undefined;
+  const period =
+    idxRaw !== undefined
+      ? periodByIndex(parseInt(idxRaw, 10))
+      : periodForDate(new Date());
+
+  const { rows: users } = await query(
+    `SELECT id, name, email, role, employment_type, pay_rate_cents,
+            is_owner, is_manager, track_hours, active
+     FROM timeclock.users WHERE id = $1`,
+    [id],
+  );
+  if (users.length === 0) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+
+  const { rows: punches } = await query(
+    `SELECT p.id, p.location_id, l.name AS location_name, p.type, p.ts,
+            p.source, p.flagged, p.flag_reason, p.geofence_pass, p.auto_closed_at
+     FROM timeclock.punches p
+     LEFT JOIN timeclock.locations l ON l.id = p.location_id
+     WHERE p.user_id = $1 AND p.ts >= $2 AND p.ts < $3
+     ORDER BY p.ts ASC`,
+    [id, period.start, period.end],
+  );
+
+  const { rows: missed } = await query(
+    `SELECT id, type, proposed_ts, reason, status, created_at, decided_at
+     FROM timeclock.missed_punch_requests
+     WHERE user_id = $1
+     ORDER BY created_at DESC
+     LIMIT 30`,
+    [id],
+  );
+
+  res.json({
+    user: users[0],
+    period,
+    punches,
+    missed,
+  });
+});
+
 // ── PATCH /manage/punches/:id ──────────────────────────────────────────────
 // Edit a punch. Records before/after in audit_log.
 const editPunchSchema = z.object({
@@ -616,6 +669,85 @@ router.get('/locations', async (_req, res) => {
      ORDER BY name`,
   );
   res.json({ locations: rows });
+});
+
+// ── PATCH /manage/locations/:id (owner) ────────────────────────────────────
+const patchLocationSchema = z.object({
+  name: z.string().min(2).max(120).optional(),
+  address: z.string().max(500).nullable().optional(),
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
+  geofence_m: z.number().int().min(20).max(5000).optional(),
+  active: z.boolean().optional(),
+  reason: z.string().min(1).max(500),
+});
+
+router.patch('/locations/:id', requireOwner, async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (Number.isNaN(id)) {
+    res.status(400).json({ error: 'Bad id' });
+    return;
+  }
+  const parsed = patchLocationSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Bad request', issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const updates: string[] = [];
+  const params: any[] = [];
+  function add(field: string, value: any) {
+    params.push(value);
+    updates.push(`${field} = $${params.length}`);
+  }
+  if (d.name !== undefined) add('name', d.name);
+  if (d.address !== undefined) add('address', d.address);
+  if (d.lat !== undefined) add('lat', d.lat);
+  if (d.lng !== undefined) add('lng', d.lng);
+  if (d.geofence_m !== undefined) add('geofence_m', d.geofence_m);
+  if (d.active !== undefined) add('active', d.active);
+  if (updates.length === 0) {
+    res.status(400).json({ error: 'No changes' });
+    return;
+  }
+  params.push(id);
+
+  type Result =
+    | { ok: true; location: any }
+    | { ok: false; status: number; error: string };
+  const result = await withTransaction<Result>(async (client) => {
+    const before = await client.query(
+      `SELECT * FROM timeclock.locations WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    if (before.rowCount === 0) {
+      return { ok: false, status: 404, error: 'Not found' };
+    }
+    const updated = await client.query(
+      `UPDATE timeclock.locations SET ${updates.join(', ')}, updated_at = NOW()
+       WHERE id = $${params.length}
+       RETURNING id, slug, name, address, lat, lng, geofence_m, active`,
+      params,
+    );
+    await client.query(
+      `INSERT INTO timeclock.audit_log
+         (actor_user_id, resource_type, resource_id, action, before_state, after_state, reason)
+       VALUES ($1, 'location', $2, 'edit', $3, $4, $5)`,
+      [
+        req.auth!.user_id,
+        id,
+        JSON.stringify(before.rows[0]),
+        JSON.stringify(updated.rows[0]),
+        d.reason,
+      ],
+    );
+    return { ok: true, location: updated.rows[0] };
+  });
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+  res.json({ location: result.location });
 });
 
 // ── POST /manage/auto-close (owner) — manually trigger ────────────────────

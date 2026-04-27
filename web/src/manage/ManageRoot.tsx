@@ -8,6 +8,8 @@ import Missed from './Missed';
 import Period from './Period';
 import Punches from './Punches';
 import Staff from './Staff';
+import Locations from './Locations';
+import EmployeeDetail from './EmployeeDetail';
 
 export default function ManageRoot() {
   return (
@@ -29,6 +31,8 @@ function ManageRoutes() {
           <Route path="period" element={<Period />} />
           <Route path="punches" element={<Punches />} />
           <Route path="staff" element={<Staff />} />
+          <Route path="offices" element={<Locations />} />
+          <Route path="employees/:id" element={<EmployeeDetail />} />
         </Route>
       </Route>
     </Routes>

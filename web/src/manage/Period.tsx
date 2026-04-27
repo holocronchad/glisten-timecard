@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { api } from '../shared/api';
 import { useAuth } from './auth';
@@ -17,6 +18,7 @@ type PeriodResponse = {
 
 export default function Period() {
   const { token, user } = useAuth();
+  const nav = useNavigate();
   const [data, setData] = useState<PeriodResponse | null>(null);
   const [index, setIndex] = useState<number | null>(null);
 
@@ -100,7 +102,10 @@ export default function Period() {
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.35, delay: Math.min(i * 0.03, 0.35) }}
-              className="p-5 flex items-center gap-4"
+              onClick={() =>
+                nav(`/manage/employees/${e.user.id}?index=${data.period.index}`)
+              }
+              className="p-5 flex items-center gap-4 hover:bg-creamSoft/5 transition-colors cursor-pointer"
             >
               <div className="flex-1">
                 <div className="text-creamSoft text-base tracking-tight">

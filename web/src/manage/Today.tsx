@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../shared/api';
 import { useAuth } from './auth';
 import { formatTime } from '../shared/geo';
@@ -28,6 +29,7 @@ const STATUS_TONE: Record<string, string> = {
 
 export default function Today() {
   const { token } = useAuth();
+  const nav = useNavigate();
   const [data, setData] = useState<TodayResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -71,7 +73,8 @@ export default function Today() {
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.4, delay: Math.min(i * 0.04, 0.4) }}
-                className="flex items-center gap-4 p-5 hover:bg-creamSoft/5 transition-colors"
+                onClick={() => nav(`/manage/employees/${e.user.id}`)}
+                className="flex items-center gap-4 p-5 hover:bg-creamSoft/5 transition-colors cursor-pointer"
               >
                 <div className="flex-1">
                   <div className="text-creamSoft text-base tracking-tight">{e.user.name}</div>
