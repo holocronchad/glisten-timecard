@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MapPin, X, Crosshair } from 'lucide-react';
+import { MapPin, X, Crosshair, Clock } from 'lucide-react';
 import { api, ApiError } from '../shared/api';
 import { useAuth } from './auth';
 import { GridSkeleton } from './Skeleton';
@@ -19,8 +19,10 @@ type Location = {
 
 export default function Locations() {
   const { token } = useAuth();
+  const { toast } = useToast();
   const [rows, setRows] = useState<Location[] | null>(null);
   const [editing, setEditing] = useState<Location | null>(null);
+  const [autoCloseBusy, setAutoCloseBusy] = useState(false);
 
   async function load() {
     const r = await api<{ locations: Location[] }>('/manage/locations', {
@@ -34,15 +36,51 @@ export default function Locations() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  async function runAutoClose() {
+    if (
+      !window.confirm(
+        'Auto-close every open shift right now? Each closed punch is flagged for your review.',
+      )
+    ) {
+      return;
+    }
+    setAutoCloseBusy(true);
+    try {
+      const r = await api<{ closed: number }>('/manage/auto-close', {
+        method: 'POST',
+        token: token ?? undefined,
+      });
+      toast(
+        r.closed === 0
+          ? 'No open shifts — nothing to close.'
+          : `Closed ${r.closed} open shift${r.closed === 1 ? '' : 's'}.`,
+      );
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : 'Auto-close failed', 'error');
+    } finally {
+      setAutoCloseBusy(false);
+    }
+  }
+
   return (
     <div>
-      <div>
-        <h1 className="text-[40px] leading-[1.05] tracking-tight font-light">
-          <span className="font-serif italic text-cream">Offices</span>
-        </h1>
-        <p className="text-creamSoft/40 text-sm mt-1">
-          Address, GPS, and geofence radius for each location.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div>
+          <h1 className="text-[40px] leading-[1.05] tracking-tight font-light">
+            <span className="font-serif italic text-cream">Offices</span>
+          </h1>
+          <p className="text-creamSoft/40 text-sm mt-1">
+            Address, GPS, and geofence radius for each location.
+          </p>
+        </div>
+        <button
+          onClick={runAutoClose}
+          disabled={autoCloseBusy}
+          className="inline-flex items-center gap-2 self-start rounded-full border border-creamSoft/15 hover:bg-creamSoft/5 text-creamSoft/80 px-4 h-10 text-sm tracking-tight disabled:opacity-50"
+        >
+          <Clock size={14} />
+          {autoCloseBusy ? 'Closing…' : 'Run auto-close now'}
+        </button>
       </div>
 
       <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
