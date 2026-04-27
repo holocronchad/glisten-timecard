@@ -1,8 +1,9 @@
 // One-time seed: insert the 3 Glisten offices + Annie Simmons (PIN 1111) +
 // Anas + Dr. Dawood as owners. Idempotent: re-running is safe.
 //
-// Office GPS coordinates are placeholders — UPDATE before launch with real
-// addresses + radii from the Glisten physical locations.
+// Office coordinates from the US Census geocoder against the public street
+// addresses. Geofence radius is 150m to absorb GPS jitter from iPad WiFi
+// positioning + indoor multipath.
 
 import { hashPin } from '../auth/pin';
 import bcrypt from 'bcrypt';
@@ -12,26 +13,26 @@ const OFFICES = [
   {
     slug: 'glisten-gilbert',
     name: 'Glisten Dental Studio',
-    address: 'Gilbert, AZ',
-    lat: 33.3528,
-    lng: -111.7890,
-    geofence_m: 100,
+    address: '4365 E Pecos Rd, Ste 127, Gilbert, AZ 85295',
+    lat: 33.289685,
+    lng: -111.694468,
+    geofence_m: 150,
   },
   {
     slug: 'glisten-mesa',
     name: 'Glisten Dental Mesa',
-    address: 'Mesa, AZ',
-    lat: 33.4152,
-    lng: -111.8315,
-    geofence_m: 100,
+    address: '633 N Gilbert Rd, Mesa, AZ 85213',
+    lat: 33.427361,
+    lng: -111.787988,
+    geofence_m: 150,
   },
   {
     slug: 'glisten-glendale',
     name: 'Glisten Dental Glendale',
-    address: 'Glendale, AZ',
-    lat: 33.5387,
-    lng: -112.1860,
-    geofence_m: 100,
+    address: '4901 W Bell Rd, Glendale, AZ 85308',
+    lat: 33.639038,
+    lng: -112.164856,
+    geofence_m: 150,
   },
 ];
 
