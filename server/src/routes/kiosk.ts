@@ -223,34 +223,44 @@ router.post('/missed-punch', async (req, res) => {
   });
 });
 
-// ── GET /kiosk/me ──────────────────────────────────────────────────────────
-// PIN in query for read-only "view my hours" — no state change, no geofence.
-// Used by the personal-view screen.
-router.get('/me', async (req, res) => {
-  const pin = String(req.query.pin || '');
-  if (!/^\d{4}$/.test(pin)) {
-    res.status(400).json({ error: 'PIN required' });
+// ── POST /kiosk/me ─────────────────────────────────────────────────────────
+// Read-only "view my hours" — PIN in body, no geofence, no state change.
+// Used by the personal-view (`/me`) page on the employee's own phone.
+const meSchema = z.object({ pin: z.string().regex(/^\d{4}$/) });
+
+router.post('/me', async (req, res) => {
+  const parsed = meSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Bad request' });
     return;
   }
-  const result = await findUserByPin(pin);
+  const result = await findUserByPin(parsed.data.pin);
   if (!result.ok) {
-    res.status(401).json({ error: 'Invalid PIN' });
+    res.status(401).json({ error: result.reason === 'locked' ? 'Locked' : 'Invalid PIN' });
     return;
   }
   const user = result.user;
 
-  // Last 14 days of punches
-  const { rows } = await query(
+  const { rows: punches } = await query(
     `SELECT id, location_id, type, ts, flagged
      FROM timeclock.punches
      WHERE user_id = $1 AND ts >= NOW() - INTERVAL '14 days'
      ORDER BY ts DESC`,
-    [user.id]
+    [user.id],
   );
+
+  const { rows: locations } = await query(
+    `SELECT id, name FROM timeclock.locations`,
+  );
+  const locName = new Map<number, string>();
+  for (const l of locations as any[]) locName.set(l.id, l.name);
 
   res.json({
     user: { id: user.id, name: user.name },
-    punches: rows,
+    punches: (punches as any[]).map((p) => ({
+      ...p,
+      location_name: p.location_id ? locName.get(p.location_id) ?? null : null,
+    })),
   });
 });
 

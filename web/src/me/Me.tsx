@@ -1,0 +1,266 @@
+import { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Flag } from 'lucide-react';
+import PinPad from '../kiosk/PinPad';
+import { api, ApiError, PunchType } from '../shared/api';
+import { formatTime, greetingForHour } from '../shared/geo';
+import { buildSegments, totalsByDay, totalMinutes } from '../shared/hours';
+
+type MeResponse = {
+  user: { id: number; name: string };
+  punches: Array<{
+    id: number;
+    location_id: number | null;
+    location_name: string | null;
+    type: PunchType;
+    ts: string;
+    flagged: boolean;
+  }>;
+};
+
+const TYPE_LABEL: Record<PunchType, string> = {
+  clock_in: 'In',
+  clock_out: 'Out',
+  lunch_start: 'Lunch start',
+  lunch_end: 'Lunch end',
+};
+
+export default function Me() {
+  const [data, setData] = useState<MeResponse | null>(null);
+  const [shake, setShake] = useState(0);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function lookup(pin: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api<MeResponse>('/kiosk/me', {
+        method: 'POST',
+        body: { pin },
+      });
+      setData(r);
+    } catch (e) {
+      const msg =
+        e instanceof ApiError
+          ? e.status === 429
+            ? 'Too many attempts — try again in a few minutes.'
+            : 'PIN not recognized.'
+          : 'Connection failed.';
+      setErr(msg);
+      setShake((s) => s + 1);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!data) return <PinScreen onPin={lookup} shake={shake} err={err} busy={busy} />;
+  return <Hours data={data} onSignOut={() => setData(null)} />;
+}
+
+function PinScreen({
+  onPin,
+  shake,
+  err,
+  busy,
+}: {
+  onPin: (pin: string) => void;
+  shake: number;
+  err: string | null;
+  busy: boolean;
+}) {
+  return (
+    <div className="bg-noise min-h-[100dvh] flex flex-col">
+      <header className="px-6 pt-6 flex justify-between items-baseline">
+        <span className="text-creamSoft/40 text-xs tracking-[0.25em] uppercase">
+          My hours
+        </span>
+        <a
+          href="/"
+          className="text-creamSoft/40 hover:text-creamSoft/70 text-xs tracking-[0.18em] uppercase transition-colors"
+        >
+          Kiosk →
+        </a>
+      </header>
+
+      <main className="flex-1 flex items-center justify-center px-6 pb-10">
+        <div className="w-full max-w-[480px] flex flex-col items-center gap-10">
+          <div className="text-center">
+            <motion.h1
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ duration: 0.7, ease: [0.22, 0.61, 0.36, 1] }}
+              className="text-[40px] sm:text-[52px] leading-[1.05] tracking-tight font-light"
+            >
+              Your <span className="font-serif italic text-cream">hours</span>
+            </motion.h1>
+            <p className="mt-3 text-creamSoft/50 text-base">
+              Enter your PIN to see your last two weeks.
+            </p>
+          </div>
+
+          <PinPad
+            onSubmit={onPin}
+            shake={shake > 0 ? shake : undefined}
+            disabled={busy}
+          />
+
+          {err && (
+            <p className="text-amber-300/80 text-sm text-center">{err}</p>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function Hours({
+  data,
+  onSignOut,
+}: {
+  data: MeResponse;
+  onSignOut: () => void;
+}) {
+  const first = data.user.name.split(' ')[0];
+  const segments = buildSegments(data.punches);
+  const dailyTotals = totalsByDay(segments);
+  const weekTotalsMinutes = totalMinutesThisWeek(segments);
+  const periodTotalMinutes = totalMinutes(segments);
+
+  return (
+    <div className="bg-noise min-h-[100dvh] flex flex-col">
+      <header className="px-6 pt-6 flex justify-between items-baseline">
+        <span className="text-creamSoft/40 text-xs tracking-[0.25em] uppercase">
+          My hours
+        </span>
+        <button
+          onClick={onSignOut}
+          className="text-creamSoft/40 hover:text-creamSoft/80 text-xs tracking-[0.18em] uppercase transition-colors"
+        >
+          Sign out
+        </button>
+      </header>
+
+      <main className="flex-1 px-6 pb-10 pt-6 max-w-[640px] mx-auto w-full">
+        <motion.h1
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ duration: 0.6 }}
+          className="text-[40px] sm:text-[48px] leading-[1.05] tracking-tight font-light"
+        >
+          {greetingForHour()},{' '}
+          <span className="font-serif italic text-cream">{first}</span>
+        </motion.h1>
+
+        <div className="mt-8 grid grid-cols-2 gap-3">
+          <Stat label="This week" value={hhmm(weekTotalsMinutes)} />
+          <Stat label="Last 14 days" value={hhmm(periodTotalMinutes)} />
+        </div>
+
+        <h2 className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
+          By day
+        </h2>
+        <div className="rounded-3xl border border-creamSoft/10 bg-graphite/40 divide-y divide-creamSoft/5">
+          {dailyTotals.length === 0 ? (
+            <div className="p-6 text-creamSoft/40 text-sm">No hours yet.</div>
+          ) : (
+            <AnimatePresence>
+              {[...dailyTotals].reverse().map((d, i) => (
+                <motion.div
+                  key={d.date}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.4, delay: Math.min(i * 0.04, 0.4) }}
+                  className="flex items-center justify-between p-4"
+                >
+                  <span className="text-creamSoft/80 text-sm">{prettyDate(d.date)}</span>
+                  <span className="text-creamSoft tabular-nums tracking-tight">
+                    {hhmm(d.worked_minutes)}
+                    {d.open && <span className="text-amber-300/80 ml-2 text-xs">(open)</span>}
+                  </span>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          )}
+        </div>
+
+        <h2 className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
+          Recent punches
+        </h2>
+        <div className="rounded-3xl border border-creamSoft/10 bg-graphite/40 divide-y divide-creamSoft/5">
+          {data.punches.length === 0 ? (
+            <div className="p-6 text-creamSoft/40 text-sm">No punches yet.</div>
+          ) : (
+            data.punches.slice(0, 30).map((p) => (
+              <div key={p.id} className="flex items-center gap-4 p-4">
+                <div className="flex-1">
+                  <div className="text-creamSoft text-sm">{TYPE_LABEL[p.type]}</div>
+                  <div className="text-creamSoft/40 text-xs">
+                    {p.location_name ?? 'No location'}
+                  </div>
+                </div>
+                <div className="text-creamSoft/70 text-sm tabular-nums tracking-tight whitespace-nowrap">
+                  {prettyDate(p.ts.slice(0, 10))} · {formatTime(p.ts)}
+                </div>
+                {p.flagged && (
+                  <Flag size={14} className="text-amber-300/80" />
+                )}
+              </div>
+            ))
+          )}
+        </div>
+
+        <p className="text-creamSoft/30 text-xs mt-8 text-center">
+          Hours are unofficial — your manager confirms the final timesheet each pay period.
+        </p>
+      </main>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-3xl border border-creamSoft/10 bg-graphite/40 p-5">
+      <div className="text-creamSoft/40 text-xs tracking-[0.18em] uppercase">{label}</div>
+      <div className="text-creamSoft text-3xl tracking-tight font-light mt-1 tabular-nums">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function hhmm(minutes: number): string {
+  if (!minutes) return '0h 00m';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${h}h ${String(m).padStart(2, '0')}m`;
+}
+
+function prettyDate(yyyymmdd: string): string {
+  const [y, m, d] = yyyymmdd.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d, 12));
+  return date.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'America/Phoenix',
+  });
+}
+
+function totalMinutesThisWeek(
+  segments: ReturnType<typeof buildSegments>,
+): number {
+  // Week starts Sunday in AZ
+  const now = new Date();
+  const az = new Date(now.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
+  const dow = az.getDay();
+  const sunday = new Date(az);
+  sunday.setHours(0, 0, 0, 0);
+  sunday.setDate(az.getDate() - dow);
+  return segments
+    .filter((s) => s.paid && s.start >= sunday)
+    .reduce(
+      (acc, s) => acc + Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000)),
+      0,
+    );
+}

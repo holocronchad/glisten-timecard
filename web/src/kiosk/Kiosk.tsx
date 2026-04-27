@@ -177,14 +177,22 @@ export default function Kiosk() {
         </div>
       </main>
 
-      <footer className="px-6 pb-6 text-creamSoft/30 text-xs flex justify-between">
+      <footer className="px-6 pb-6 text-creamSoft/30 text-xs flex justify-between items-center">
         <span className="tracking-[0.2em] uppercase">Glisten Timecard</span>
-        <a
-          href="/manage"
-          className="tracking-[0.2em] uppercase hover:text-creamSoft/70 transition-colors"
-        >
-          Manager
-        </a>
+        <div className="flex gap-5">
+          <a
+            href="/me"
+            className="tracking-[0.2em] uppercase hover:text-creamSoft/70 transition-colors"
+          >
+            My hours
+          </a>
+          <a
+            href="/manage"
+            className="tracking-[0.2em] uppercase hover:text-creamSoft/70 transition-colors"
+          >
+            Manager
+          </a>
+        </div>
       </footer>
 
       <AnimatePresence>
