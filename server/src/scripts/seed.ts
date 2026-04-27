@@ -53,30 +53,40 @@ async function main() {
     console.log(`  ✓ location: ${o.slug}`);
   }
 
-  // Annie Simmons — first real employee, PIN 1111
+  // Annie Simmons — first real employee, PIN 1111. Dedupe by name since the
+  // schema doesn't have a unique constraint that ON CONFLICT could target.
   const anniePin = await hashPin('1111');
-  await query(
-    `INSERT INTO timeclock.users
-       (name, pin_hash, role, employment_type, is_owner, is_manager, track_hours, active)
-     VALUES ($1, $2, $3, $4, false, false, true, true)
-     ON CONFLICT DO NOTHING`,
-    ['Annie Simmons', anniePin, 'front_desk', 'W2']
+  const annieExisting = await query<{ id: number }>(
+    `SELECT id FROM timeclock.users WHERE name = $1 AND active = true`,
+    ['Annie Simmons'],
   );
-  console.log('  ✓ user: Annie Simmons (PIN 1111)');
+  if (annieExisting.rows.length === 0) {
+    await query(
+      `INSERT INTO timeclock.users
+         (name, pin_hash, role, employment_type, is_owner, is_manager, track_hours, active)
+       VALUES ($1, $2, $3, $4, false, false, true, true)`,
+      ['Annie Simmons', anniePin, 'front_desk', 'W2'],
+    );
+    console.log('  ✓ user: Annie Simmons (PIN 1111)');
+  } else {
+    console.log('  ✓ user: Annie Simmons (already seeded)');
+  }
 
-  // Owners don't punch (track_hours = false). PIN is required by schema but
-  // unused — generate a random non-numeric placeholder per owner so they can't
-  // collide with each other in bcrypt.compare.
+  // Owners don't punch (track_hours = false). They log into the manager
+  // dashboard with a username + 4-digit PIN. Same bcrypt lookup as the
+  // kiosk PIN, but findUserByPin won't return them since track_hours = false.
   await upsertOwner({
     name: 'Anas Hasic',
+    username: 'anas',
+    pin: process.env.SEED_ANAS_PIN || '0000',
     email: process.env.SEED_ANAS_EMAIL || 'team@holocronhq.com',
-    password: process.env.SEED_ANAS_PASSWORD,
     role: 'owner',
   });
   await upsertOwner({
-    name: 'Dr. Dawood',
+    name: 'Dr. Revan Dawood',
+    username: 'revandawood',
+    pin: process.env.SEED_DAWOOD_PIN || '1996',
     email: process.env.SEED_DAWOOD_EMAIL || 'dawood@glistendental.com',
-    password: process.env.SEED_DAWOOD_PASSWORD,
     role: 'doctor',
   });
 
@@ -86,50 +96,48 @@ async function main() {
 
 async function upsertOwner({
   name,
+  username,
+  pin,
   email,
-  password,
   role,
 }: {
   name: string;
-  email: string;
-  password?: string;
+  username: string;
+  pin: string;
+  email?: string;
   role: string;
 }) {
-  if (!password) {
-    console.log(`  ⚠ password not set — skipping owner ${name}`);
+  if (!/^\d{4}$/.test(pin)) {
+    console.log(`  ⚠ invalid PIN for ${name}; skipping`);
     return;
   }
-  const passwordHash = await bcrypt.hash(password, 10);
-  // Owners don't use kiosk PIN; bcrypt-hash a long random secret so collisions
-  // with employee PINs are mathematically impossible.
-  const placeholderPin = `OWNER:${Math.random().toString(36).slice(2)}-${Date.now()}`;
-  const pinHash = await bcrypt.hash(placeholderPin, 10);
+  const pinHash = await bcrypt.hash(pin, 10);
 
   const existing = await query<{ id: number }>(
     `SELECT id FROM timeclock.users
-     WHERE lower(email) = lower($1) AND active = true`,
-    [email],
+     WHERE LOWER(username) = LOWER($1) AND active = true`,
+    [username],
   );
   if (existing.rows.length > 0) {
     await query(
       `UPDATE timeclock.users
-       SET name = $2, password_hash = $3, role = $4,
+       SET name = $2, pin_hash = $3, role = $4, email = $5,
            is_owner = true, is_manager = true, track_hours = false,
            updated_at = NOW()
        WHERE id = $1`,
-      [existing.rows[0].id, name, passwordHash, role],
+      [existing.rows[0].id, name, pinHash, role, email ?? null],
     );
-    console.log(`  ✓ owner updated: ${name}`);
+    console.log(`  ✓ owner updated: ${name} (username: ${username}, PIN: ${pin})`);
     return;
   }
   await query(
     `INSERT INTO timeclock.users
-       (name, email, pin_hash, password_hash, role, employment_type,
+       (name, username, email, pin_hash, role, employment_type,
         is_owner, is_manager, track_hours, active)
      VALUES ($1, $2, $3, $4, $5, $6, true, true, false, true)`,
-    [name, email, pinHash, passwordHash, role, 'W2'],
+    [name, username, email ?? null, pinHash, role, 'W2'],
   );
-  console.log(`  ✓ owner created: ${name}`);
+  console.log(`  ✓ owner created: ${name} (username: ${username}, PIN: ${pin})`);
 }
 
 main().catch((err) => {

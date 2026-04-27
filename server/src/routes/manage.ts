@@ -23,9 +23,12 @@ import { config } from '../config';
 const router = Router();
 
 // ── POST /manage/login ─────────────────────────────────────────────────────
+// Username + 4-digit PIN. Same bcrypt lookup used for kiosk PINs but scoped
+// to the row that matches the username so we don't leak whether a username
+// exists.
 const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
+  username: z.string().min(2).max(60),
+  pin: z.string().regex(/^\d{4}$/),
 });
 
 router.post('/login', async (req, res) => {
@@ -34,28 +37,28 @@ router.post('/login', async (req, res) => {
     res.status(400).json({ error: 'Bad request' });
     return;
   }
-  const { email, password } = parsed.data;
+  const { username, pin } = parsed.data;
   const { rows } = await query<{
     id: number;
     name: string;
-    password_hash: string | null;
+    pin_hash: string;
     is_owner: boolean;
     is_manager: boolean;
     active: boolean;
   }>(
-    `SELECT id, name, password_hash, is_owner, is_manager, active
+    `SELECT id, name, pin_hash, is_owner, is_manager, active
      FROM timeclock.users
-     WHERE lower(email) = lower($1) AND active = true`,
-    [email],
+     WHERE LOWER(username) = LOWER($1) AND active = true`,
+    [username.trim()],
   );
   const user = rows[0];
-  if (!user || !user.password_hash) {
-    res.status(401).json({ error: 'Invalid credentials' });
+  if (!user) {
+    res.status(401).json({ error: 'Invalid username or PIN' });
     return;
   }
-  const ok = await bcrypt.compare(password, user.password_hash);
+  const ok = await bcrypt.compare(pin, user.pin_hash);
   if (!ok) {
-    res.status(401).json({ error: 'Invalid credentials' });
+    res.status(401).json({ error: 'Invalid username or PIN' });
     return;
   }
   if (!user.is_manager && !user.is_owner) {

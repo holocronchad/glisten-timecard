@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Flag } from 'lucide-react';
 import PinPad from '../kiosk/PinPad';
+import CloudBackground from '../kiosk/CloudBackground';
 import { api, ApiError, PunchType } from '../shared/api';
 import { formatTime, greetingForHour } from '../shared/geo';
 import { buildSegments, totalsByDay, totalMinutes } from '../shared/hours';
@@ -70,7 +71,9 @@ function PinScreen({
   busy: boolean;
 }) {
   return (
-    <div className="bg-noise min-h-[100dvh] flex flex-col">
+    <div className="relative min-h-[100dvh] flex flex-col isolate">
+      <CloudBackground />
+      <div className="relative z-10 flex flex-col flex-1">
       <header className="px-6 pt-6 flex justify-between items-baseline">
         <span className="text-creamSoft/40 text-xs tracking-[0.25em] uppercase">
           My hours
@@ -84,7 +87,7 @@ function PinScreen({
       </header>
 
       <main className="flex-1 flex items-center justify-center px-6 pb-10">
-        <div className="w-full max-w-[480px] flex flex-col items-center gap-10">
+        <div className="frosted-pane w-full max-w-[480px] flex flex-col items-center gap-6 sm:gap-8 p-6 sm:p-8 rounded-[2rem]">
           <div className="text-center">
             <motion.h1
               initial={{ y: 20, opacity: 0 }}
@@ -110,6 +113,7 @@ function PinScreen({
           )}
         </div>
       </main>
+      </div>
     </div>
   );
 }
@@ -128,7 +132,9 @@ function Hours({
   const periodTotalMinutes = totalMinutes(segments);
 
   return (
-    <div className="bg-noise min-h-[100dvh] flex flex-col">
+    <div className="relative min-h-[100dvh] flex flex-col isolate">
+      <CloudBackground />
+      <div className="relative z-10 flex flex-col flex-1">
       <header className="px-6 pt-6 flex justify-between items-baseline">
         <span className="text-creamSoft/40 text-xs tracking-[0.25em] uppercase">
           My hours
@@ -214,6 +220,7 @@ function Hours({
           Hours are unofficial — your manager confirms the final timesheet each pay period.
         </p>
       </main>
+      </div>
     </div>
   );
 }

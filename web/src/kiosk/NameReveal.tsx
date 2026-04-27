@@ -74,11 +74,14 @@ export default function NameReveal({
               initial={{ y: 16, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ duration: 0.5, delay: 0.2 + i * 0.07 }}
-              whileHover={{ scale: 1.02 }}
+              whileHover={{ scale: 1.02, backgroundColor: 'rgba(255, 255, 255, 0.10)' }}
               whileTap={{ scale: 0.98 }}
+              style={{
+                backgroundColor: 'rgba(255, 255, 255, 0.06)',
+              }}
               className={[
                 'group flex items-center gap-4 p-5 rounded-3xl text-left',
-                'bg-graphite/70 hover:bg-graphite border border-creamSoft/10',
+                'border border-creamSoft/15',
                 'transition-colors',
               ].join(' ')}
             >
