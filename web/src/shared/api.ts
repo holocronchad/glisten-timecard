@@ -82,7 +82,25 @@ export type PunchResponse = {
   pending_approval?: boolean;
 };
 
-export type RegisterResponse = {
-  user: { id: number; name: string; approved: boolean };
-  message: string;
+export type RegisterSuggestion = {
+  id: number;
+  name: string;
+  role: string | null;
+  reason: 'fuzzy' | 'first_name';
 };
+
+export type RegisterResponse =
+  | {
+      user: { id: number; name: string; approved: boolean };
+      message: string;
+      roster_matched: boolean;
+      suggestion?: undefined;
+    }
+  | {
+      // Suggest path — no DB write yet. Frontend shows "Did you mean X?"
+      // and re-POSTs with `confirm_user_id` (Yes) or `force_self_register`
+      // (No, register me as the name I typed).
+      suggestion: RegisterSuggestion;
+      message: string;
+      user?: undefined;
+    };

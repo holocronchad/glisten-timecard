@@ -16,6 +16,7 @@ import {
   getLatestPunch, nextAllowedPunches, recordPunch, type PunchType,
 } from '../services/punches';
 import { cprDaysUntil } from '../services/cpr';
+import { matchRoster, type RosterCandidate } from '../services/nameMatch';
 import { query } from '../db';
 
 const router = Router();
@@ -123,23 +124,31 @@ router.post('/lookup', async (req, res) => {
 });
 
 // ── POST /kiosk/register ───────────────────────────────────────────────────
-// New employee onboarding from the kiosk. Two paths:
+// New employee onboarding from the kiosk. Three outcomes:
 //
-// 1. ROSTER MATCH — first+last name matches a manager-preloaded user with
-//    pin_hash IS NULL. Sets that user's PIN; user is fully active immediately
-//    (rate, role, employment_type already filled in by the import script).
+// 1. EXACT — first+last (after normalization, accent-strip, alias check)
+//    matches a roster row with pin_hash IS NULL. Sets the PIN immediately.
+//    Returns 200 { user, roster_matched: true }.
 //
-// 2. NO MATCH — falls back to legacy self-register: creates a new user with
+// 2. SUGGEST — fuzzy match (Levenshtein ≤ 2) OR unique first-name hit. No
+//    DB write yet. Returns 200 { suggestion: { id, name, role, reason } }
+//    so the frontend can show "Did you mean X?" The user clicks Yes →
+//    re-POSTs with `confirm_user_id` to commit; or No → re-POSTs with
+//    `force_self_register: true` to create a fresh approved=false account.
+//
+// 3. NONE — falls back to legacy self-register: creates a new user with
 //    approved=false. Punches collected, excluded from payroll until a
 //    manager approves on the Pending tab.
 //
-// Both paths require geofence (must be inside an office).
+// All paths require geofence (must be inside an office).
 const registerSchema = z.object({
   first_name: z.string().trim().min(1).max(60),
   last_name: z.string().trim().min(1).max(60),
   pin: z.string().regex(/^\d{4}$/),
   lat: z.number().min(-90).max(90),
   lng: z.number().min(-180).max(180),
+  confirm_user_id: z.number().int().positive().optional(),
+  force_self_register: z.boolean().optional(),
 });
 
 router.post('/register', async (req, res) => {
@@ -148,7 +157,8 @@ router.post('/register', async (req, res) => {
     res.status(400).json({ error: 'Bad request', issues: parsed.error.issues });
     return;
   }
-  const { first_name, last_name, pin, lat, lng } = parsed.data;
+  const { first_name, last_name, pin, lat, lng, confirm_user_id, force_self_register } =
+    parsed.data;
 
   // Geofence — required so anyone in Phoenix can't self-onboard from their phone.
   const { rows: locations } = await query(
@@ -195,35 +205,36 @@ router.post('/register', async (req, res) => {
     req.ip ||
     null;
 
-  // Roster-match path: case-insensitive first+last match against a row with
-  // pin_hash IS NULL. We accept either order ("John Smith" or "Smith, John")
-  // by checking the parts; the canonical stored form is "First Last".
-  const { rows: rosterMatches } = await query<{
-    id: number;
-    name: string;
-    role: string;
-    employment_type: string;
-  }>(
-    `SELECT id, name, role, employment_type
-     FROM timeclock.users
-     WHERE active = true
-       AND pin_hash IS NULL
-       AND (
-         LOWER(name) = LOWER($1)
-         OR LOWER(name) LIKE LOWER($2)
-         OR LOWER(name) LIKE LOWER($3)
-       )`,
-    [fullName, `${first_name}%${last_name}`, `${last_name}%${first_name}`],
-  );
-
-  if (rosterMatches.length === 1) {
-    // Roster hit — fill in the PIN, leave everything else untouched.
-    const matched = rosterMatches[0];
+  // ── Confirm path: employee confirmed a fuzzy/first-name suggestion. Skip
+  // matching, just verify the row is still a valid roster preload and fill
+  // the PIN.
+  if (confirm_user_id) {
+    const { rows: confirmRows } = await query<{
+      id: number;
+      name: string;
+      pin_hash: string | null;
+    }>(
+      `SELECT id, name, pin_hash
+       FROM timeclock.users
+       WHERE id = $1 AND active = true`,
+      [confirm_user_id],
+    );
+    if (confirmRows.length === 0) {
+      res.status(404).json({ error: 'Suggested user no longer exists' });
+      return;
+    }
+    if (confirmRows[0].pin_hash) {
+      res.status(409).json({
+        error: 'Already claimed',
+        message: 'That account already has a PIN. Please ask a manager.',
+      });
+      return;
+    }
     await query(
       `UPDATE timeclock.users
        SET pin_hash = $1, approved = true, updated_at = NOW()
        WHERE id = $2`,
-      [pinHash, matched.id],
+      [pinHash, confirm_user_id],
     );
     await query(
       `INSERT INTO timeclock.audit_log
@@ -231,32 +242,114 @@ router.post('/register', async (req, res) => {
        VALUES (NULL, 'user', $1, 'roster_pin_set',
                $2::jsonb, $3, $4)`,
       [
-        matched.id,
-        JSON.stringify({ id: matched.id, name: matched.name, location_id: office.id }),
-        `Employee set their own PIN at kiosk (matched roster row "${matched.name}")`,
+        confirm_user_id,
+        JSON.stringify({
+          id: confirm_user_id,
+          name: confirmRows[0].name,
+          location_id: office.id,
+          confirmed_typo: true,
+          typed_as: fullName,
+        }),
+        `Employee confirmed roster suggestion (typed "${fullName}", roster row "${confirmRows[0].name}")`,
         ip,
       ],
     );
     res.status(200).json({
-      user: { id: matched.id, name: matched.name, approved: true },
-      message: `Welcome, ${first_name}. You're all set — just enter your PIN whenever you punch.`,
+      user: { id: confirm_user_id, name: confirmRows[0].name, approved: true },
+      message: `Welcome. You're all set — just enter your PIN whenever you punch.`,
       roster_matched: true,
     });
     return;
   }
 
-  if (rosterMatches.length > 1) {
-    // Ambiguous — multiple roster rows match this name. Defer to a manager
-    // rather than guess. Rare but possible (e.g. two "Maria Garcia"s).
-    res.status(409).json({
-      error: 'Multiple matches',
-      message: 'More than one staff record matches that name — please ask a manager to set up your PIN.',
-    });
-    return;
+  // Pull all roster preload candidates (active, no PIN yet) for matching.
+  const { rows: candidateRows } = await query<{
+    id: number;
+    name: string;
+    role: string;
+    aliases: string[] | null;
+  }>(
+    `SELECT id, name, role, aliases
+     FROM timeclock.users
+     WHERE active = true AND pin_hash IS NULL`,
+  );
+  const candidates: RosterCandidate[] = candidateRows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    aliases: r.aliases ?? [],
+  }));
+
+  if (!force_self_register) {
+    const result = matchRoster(first_name, last_name, candidates);
+
+    if (result.kind === 'multi') {
+      res.status(409).json({
+        error: 'Multiple matches',
+        message:
+          'More than one staff record matches that name — please ask a manager to set up your PIN.',
+      });
+      return;
+    }
+
+    if (result.kind === 'exact') {
+      const matched = result.user;
+      await query(
+        `UPDATE timeclock.users
+         SET pin_hash = $1, approved = true, updated_at = NOW()
+         WHERE id = $2`,
+        [pinHash, matched.id],
+      );
+      await query(
+        `INSERT INTO timeclock.audit_log
+           (actor_user_id, resource_type, resource_id, action, after_state, reason, ip)
+         VALUES (NULL, 'user', $1, 'roster_pin_set',
+                 $2::jsonb, $3, $4)`,
+        [
+          matched.id,
+          JSON.stringify({
+            id: matched.id,
+            name: matched.name,
+            location_id: office.id,
+          }),
+          `Employee set their own PIN at kiosk (matched roster row "${matched.name}")`,
+          ip,
+        ],
+      );
+      res.status(200).json({
+        user: { id: matched.id, name: matched.name, approved: true },
+        message: `Welcome, ${first_name}. You're all set — just enter your PIN whenever you punch.`,
+        roster_matched: true,
+      });
+      return;
+    }
+
+    if (result.kind === 'suggest') {
+      // No DB write — frontend will show "Did you mean X?" and re-POST with
+      // confirm_user_id (Yes) or force_self_register (No).
+      const { rows: detail } = await query<{ role: string }>(
+        `SELECT role FROM timeclock.users WHERE id = $1`,
+        [result.user.id],
+      );
+      res.status(200).json({
+        suggestion: {
+          id: result.user.id,
+          name: result.user.name,
+          role: detail[0]?.role ?? null,
+          reason: result.reason,
+        },
+        message:
+          result.reason === 'fuzzy'
+            ? `Did you mean ${result.user.name}?`
+            : `Are you ${result.user.name}?`,
+      });
+      return;
+    }
+
+    // result.kind === 'none' falls through to self-register below.
   }
 
-  // No roster match — legacy self-register path. User created with
-  // approved=false; manager must approve before payroll counts the hours.
+  // No roster match (or force_self_register). Legacy path: user created
+  // with approved=false; manager must approve before payroll counts hours.
   const { rows: inserted } = await query<{ id: number; name: string }>(
     `INSERT INTO timeclock.users
        (name, pin_hash, role, employment_type, is_owner, is_manager,
@@ -271,10 +364,13 @@ router.post('/register', async (req, res) => {
     `INSERT INTO timeclock.audit_log
        (actor_user_id, resource_type, resource_id, action, after_state, reason, ip)
      VALUES (NULL, 'user', $1, 'self_register',
-             $2::jsonb, 'self-registered at kiosk (no roster match — pending approval)', $3)`,
+             $2::jsonb, $3, $4)`,
     [
       user.id,
       JSON.stringify({ id: user.id, name: user.name, location_id: office.id }),
+      force_self_register
+        ? 'Employee declined roster suggestion — registered as new'
+        : 'Self-registered at kiosk (no roster match — pending approval)',
       ip,
     ],
   );

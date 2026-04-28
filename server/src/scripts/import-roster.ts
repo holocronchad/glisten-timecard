@@ -29,6 +29,9 @@ interface RosterEntry {
   track_hours: boolean;
   /** Free-text note that lands in the audit log for context. */
   note?: string;
+  /** Nickname / common-misspelling variants. Matched alongside `name`
+   *  during the kiosk register flow. Catches "Ann" for "Annie", etc. */
+  aliases?: string[];
 }
 
 const ROSTER: RosterEntry[] = [
@@ -53,7 +56,7 @@ const ROSTER: RosterEntry[] = [
   { name: 'Aubrey Hanks',      role: 'hygienist',        employment_type: 'W2', pay_rate_cents: 5700, track_hours: true, note: 'Works Mesa + Gilbert' },
   { name: 'Sofia Hernandez',   role: 'dental_assistant', employment_type: 'W2', pay_rate_cents: 2500, track_hours: true },
   { name: 'Aayushi Parikh',    role: 'front_desk',       employment_type: 'W2', pay_rate_cents: 2900, track_hours: true },
-  { name: 'Annie Simmons',     role: 'dental_assistant', employment_type: 'W2', pay_rate_cents: 2700, track_hours: true },
+  { name: 'Annie Simmons',     role: 'dental_assistant', employment_type: 'W2', pay_rate_cents: 2700, track_hours: true, aliases: ['Ann Simmons', 'Anne Simmons'] },
   { name: 'Ayda Reshidi',      role: 'dental_assistant', employment_type: 'W2', pay_rate_cents: 2100, track_hours: true },
 
   // ── Gilbert ───────────────────────────────────────────────────────────
@@ -112,15 +115,16 @@ async function main() {
       await query(
         `UPDATE timeclock.users
          SET name = $1, role = $2, employment_type = $3, pay_rate_cents = $4,
-             track_hours = $5, active = true, approved = true,
-             updated_at = NOW()
-         WHERE id = $6`,
+             track_hours = $5, aliases = $6,
+             active = true, approved = true, updated_at = NOW()
+         WHERE id = $7`,
         [
           entry.name,
           entry.role,
           entry.employment_type,
           entry.pay_rate_cents,
           entry.track_hours,
+          entry.aliases ?? [],
           row.id,
         ],
       );
@@ -140,11 +144,18 @@ async function main() {
     // manager curated this list — the kiosk register flow trusts a name match.
     const { rows: ins } = await query<{ id: number }>(
       `INSERT INTO timeclock.users
-         (name, pin_hash, role, employment_type, pay_rate_cents,
+         (name, pin_hash, role, employment_type, pay_rate_cents, aliases,
           is_owner, is_manager, track_hours, active, approved, self_registered)
-       VALUES ($1, NULL, $2, $3, $4, false, false, $5, true, true, false)
+       VALUES ($1, NULL, $2, $3, $4, $5, false, false, $6, true, true, false)
        RETURNING id`,
-      [entry.name, entry.role, entry.employment_type, entry.pay_rate_cents, entry.track_hours],
+      [
+        entry.name,
+        entry.role,
+        entry.employment_type,
+        entry.pay_rate_cents,
+        entry.aliases ?? [],
+        entry.track_hours,
+      ],
     );
 
     if (entry.note) {

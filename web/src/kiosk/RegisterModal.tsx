@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { api, ApiError, RegisterResponse } from '../shared/api';
+import { api, ApiError, RegisterResponse, RegisterSuggestion } from '../shared/api';
 
 type Props = {
   initialPin: string;
@@ -9,7 +9,7 @@ type Props = {
   onRegistered: (pin: string, name: string) => void;
 };
 
-type Step = 'form' | 'confirm-pin' | 'submitting';
+type Step = 'form' | 'submitting' | 'suggest';
 
 export default function RegisterModal({ initialPin, coords, onClose, onRegistered }: Props) {
   const [firstName, setFirstName] = useState('');
@@ -18,23 +18,15 @@ export default function RegisterModal({ initialPin, coords, onClose, onRegistere
   const [pinConfirm, setPinConfirm] = useState('');
   const [step, setStep] = useState<Step>('form');
   const [error, setError] = useState<string | null>(null);
+  const [suggestion, setSuggestion] = useState<RegisterSuggestion | null>(null);
 
-  async function submit() {
-    if (!firstName.trim() || !lastName.trim()) {
-      setError('Enter your first and last name.');
-      return;
-    }
-    if (!/^\d{4}$/.test(pin)) {
-      setError('PIN must be 4 digits.');
-      return;
-    }
-    if (pin !== pinConfirm) {
-      setError("PINs don't match.");
-      setStep('form');
-      return;
-    }
+  async function postRegister(extra: {
+    confirm_user_id?: number;
+    force_self_register?: boolean;
+  } = {}) {
     if (!coords) {
       setError('Location is required to register a new employee.');
+      setStep('form');
       return;
     }
     setStep('submitting');
@@ -48,20 +40,61 @@ export default function RegisterModal({ initialPin, coords, onClose, onRegistere
           pin,
           lat: coords.lat,
           lng: coords.lng,
+          ...extra,
         },
       });
-      onRegistered(pin, r.user.name);
+      if ('suggestion' in r && r.suggestion) {
+        setSuggestion(r.suggestion);
+        setStep('suggest');
+        return;
+      }
+      if ('user' in r && r.user) {
+        onRegistered(pin, r.user.name);
+        return;
+      }
+      setError('Unexpected response.');
+      setStep('form');
     } catch (e) {
       const msg =
         e instanceof ApiError
           ? e.status === 409
-            ? 'That PIN is already taken — pick a different one.'
+            ? e.code === 'Multiple matches'
+              ? 'More than one record matches — please ask a manager.'
+              : 'That PIN is already taken — pick a different one.'
             : e.status === 403
               ? 'You can only register from inside a Glisten Dental office.'
               : e.message
           : 'Registration failed.';
       setError(msg);
       setStep('form');
+    }
+  }
+
+  function submit() {
+    if (!firstName.trim() || !lastName.trim()) {
+      setError('Enter your first and last name.');
+      return;
+    }
+    if (!/^\d{4}$/.test(pin)) {
+      setError('PIN must be 4 digits.');
+      return;
+    }
+    if (pin !== pinConfirm) {
+      setError("PINs don't match.");
+      setStep('form');
+      return;
+    }
+    postRegister();
+  }
+
+  function confirmSuggestion(yes: boolean) {
+    if (!suggestion) return;
+    if (yes) {
+      postRegister({ confirm_user_id: suggestion.id });
+    } else {
+      // Employee says "no, that's not me" → register as a fresh
+      // self-registered approved=false account, manager will approve.
+      postRegister({ force_self_register: true });
     }
   }
 
@@ -87,7 +120,9 @@ export default function RegisterModal({ initialPin, coords, onClose, onRegistere
             New <span className="font-serif italic text-cream">employee</span>
           </h2>
           <p className="mt-2 text-creamSoft/55 text-sm">
-            Set up your timecard. Just first name, last name, and a 4-digit PIN you'll remember.
+            {step === 'suggest'
+              ? 'We found a close match in our roster.'
+              : "Set up your timecard. Just first name, last name, and a 4-digit PIN you'll remember."}
           </p>
         </div>
 
@@ -174,11 +209,59 @@ export default function RegisterModal({ initialPin, coords, onClose, onRegistere
               Setting you up…
             </motion.div>
           )}
+
+          {step === 'suggest' && suggestion && (
+            <motion.div
+              key="suggest"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="mt-6 flex flex-col gap-3"
+            >
+              <div className="rounded-2xl border border-creamSoft/15 bg-creamSoft/5 px-5 py-4 text-center">
+                <div className="text-creamSoft/60 text-xs tracking-[0.18em] uppercase mb-1">
+                  {suggestion.reason === 'fuzzy' ? 'Did you mean' : 'Are you'}
+                </div>
+                <div className="text-creamSoft text-2xl tracking-tight font-serif italic">
+                  {suggestion.name}
+                </div>
+                {suggestion.role && (
+                  <div className="text-creamSoft/40 text-xs mt-1 tracking-tight">
+                    {suggestion.role.replace(/_/g, ' ')}
+                  </div>
+                )}
+              </div>
+
+              <p className="text-creamSoft/45 text-xs text-center leading-relaxed">
+                You typed <span className="text-creamSoft/70">"{firstName} {lastName}"</span>.
+                Confirm to claim this account, or "Not me" to register as a new person.
+              </p>
+
+              <div className="flex gap-3 mt-2">
+                <button
+                  type="button"
+                  onClick={() => confirmSuggestion(false)}
+                  className="flex-1 rounded-full px-4 py-3 text-creamSoft/60 hover:text-creamSoft text-sm tracking-tight border border-creamSoft/15 hover:border-creamSoft/30 transition-colors"
+                >
+                  Not me
+                </button>
+                <button
+                  type="button"
+                  onClick={() => confirmSuggestion(true)}
+                  className="flex-1 rounded-full px-4 py-3 bg-cream text-ink text-sm tracking-tight font-bold"
+                >
+                  Yes, that's me
+                </button>
+              </div>
+            </motion.div>
+          )}
         </AnimatePresence>
 
-        <p className="mt-6 text-creamSoft/35 text-[11px] text-center leading-relaxed">
-          A manager will approve your account before your first paycheck. Your time is recorded starting now.
-        </p>
+        {step !== 'suggest' && (
+          <p className="mt-6 text-creamSoft/35 text-[11px] text-center leading-relaxed">
+            A manager will approve your account before your first paycheck. Your time is recorded starting now.
+          </p>
+        )}
       </motion.div>
     </motion.div>
   );
