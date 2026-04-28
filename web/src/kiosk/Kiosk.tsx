@@ -15,7 +15,7 @@ import {
   PunchResponse,
   PunchType,
 } from '../shared/api';
-import { getCurrentPosition, greetingForHour } from '../shared/geo';
+import { getCurrentPosition, geoPermissionState, greetingForHour, type GeoError } from '../shared/geo';
 import { vibrateError } from '../shared/feedback';
 
 // Must match STORAGE_KEY in src/manage/auth.tsx so AuthProvider picks it up
@@ -38,19 +38,30 @@ export default function Kiosk() {
   const [error, setError] = useState<string | null>(null);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsState, setGpsState] = useState<'pending' | 'ready' | 'denied'>('pending');
+  const [gpsError, setGpsError] = useState<GeoError | null>(null);
   const [now, setNow] = useState(new Date());
   const [registerOpenForPin, setRegisterOpenForPin] = useState<string | null>(null);
 
-  const requestGps = useCallback(() => {
+  const requestGps = useCallback(async () => {
     setGpsState('pending');
-    getCurrentPosition().then((c) => {
-      if (c) {
-        setCoords(c);
-        setGpsState('ready');
-      } else {
-        setGpsState('denied');
-      }
-    });
+    setGpsError(null);
+    // Check if the browser has already cached a 'denied' decision — if so,
+    // calling getCurrentPosition won't re-prompt. We surface that state
+    // distinctly so the UI can tell the user to fix it in browser settings.
+    const perm = await geoPermissionState();
+    if (perm === 'denied') {
+      setGpsError('denied');
+      setGpsState('denied');
+      return;
+    }
+    const r = await getCurrentPosition();
+    if (r.ok) {
+      setCoords(r.coords);
+      setGpsState('ready');
+    } else {
+      setGpsError(r.reason);
+      setGpsState('denied');
+    }
   }, []);
 
   useEffect(() => {
@@ -186,13 +197,33 @@ export default function Kiosk() {
               >
                 <Hero />
                 {gpsState === 'denied' && (
-                  <button
-                    type="button"
-                    onClick={requestGps}
-                    className="rounded-full bg-amber-300/95 text-ink px-4 py-2 text-xs sm:text-sm tracking-tight max-w-full whitespace-normal text-center leading-snug"
-                  >
-                    Tap to allow location to punch
-                  </button>
+                  <div className="flex flex-col items-center gap-2 max-w-[420px]">
+                    <button
+                      type="button"
+                      onClick={requestGps}
+                      className="rounded-full bg-amber-300/95 text-ink px-4 py-2 text-xs sm:text-sm tracking-tight max-w-full whitespace-normal text-center leading-snug"
+                    >
+                      Tap to allow location to punch
+                    </button>
+                    {gpsError === 'denied' && (
+                      <p className="text-amber-300/80 text-[11px] text-center leading-snug px-4">
+                        Browser blocked location for this site. Tap the lock icon in
+                        the address bar → Site settings → Location → Allow, then
+                        reload.
+                      </p>
+                    )}
+                    {gpsError === 'unavailable' && (
+                      <p className="text-amber-300/80 text-[11px] text-center leading-snug px-4">
+                        Couldn't get a GPS fix. Make sure WiFi/Bluetooth are on
+                        (helps positioning) and try again.
+                      </p>
+                    )}
+                    {gpsError === 'timeout' && (
+                      <p className="text-amber-300/80 text-[11px] text-center leading-snug px-4">
+                        Location lookup timed out. Try again or step closer to a window.
+                      </p>
+                    )}
+                  </div>
                 )}
                 <PinPad
                   onSubmit={handlePin}
@@ -306,6 +337,7 @@ export default function Kiosk() {
           <RegisterModal
             initialPin={registerOpenForPin}
             coords={coords}
+            gpsError={gpsError}
             onRequestGps={requestGps}
             onClose={() => setRegisterOpenForPin(null)}
             onRegistered={handleRegistered}

@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api, ApiError, RegisterResponse, RegisterSuggestion } from '../shared/api';
+import type { GeoError } from '../shared/geo';
 
 type Props = {
   initialPin: string;
   coords: { lat: number; lng: number } | null;
+  gpsError: GeoError | null;
   onRequestGps: () => void;
   onClose: () => void;
   onRegistered: (pin: string, name: string) => void;
@@ -15,6 +17,7 @@ type Step = 'form' | 'submitting' | 'suggest';
 export default function RegisterModal({
   initialPin,
   coords,
+  gpsError,
   onRequestGps,
   onClose,
   onRegistered,
@@ -186,13 +189,32 @@ export default function RegisterModal({
               />
 
               {!coords && (
-                <button
-                  type="button"
-                  onClick={onRequestGps}
-                  className="w-full rounded-full bg-amber-300/95 text-ink px-4 py-2.5 text-sm tracking-tight font-bold mt-1"
-                >
-                  Tap to allow location
-                </button>
+                <div className="flex flex-col gap-2 mt-1">
+                  <button
+                    type="button"
+                    onClick={onRequestGps}
+                    className="w-full rounded-full bg-amber-300/95 text-ink px-4 py-2.5 text-sm tracking-tight font-bold"
+                  >
+                    Tap to allow location
+                  </button>
+                  {gpsError === 'denied' && (
+                    <p className="text-amber-300/85 text-[11px] text-center leading-snug px-2">
+                      Your browser is blocking location for this site. Tap the
+                      lock icon in the address bar → Site settings → Location
+                      → <strong>Allow</strong>, then reload this page.
+                    </p>
+                  )}
+                  {gpsError === 'unavailable' && (
+                    <p className="text-amber-300/85 text-[11px] text-center leading-snug px-2">
+                      Couldn't get a GPS fix. Try near a window or with WiFi on.
+                    </p>
+                  )}
+                  {gpsError === 'timeout' && (
+                    <p className="text-amber-300/85 text-[11px] text-center leading-snug px-2">
+                      Location lookup timed out. Tap again.
+                    </p>
+                  )}
+                </div>
               )}
 
               {error && (
