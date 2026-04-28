@@ -715,12 +715,20 @@ router.post('/staff', requireOwner, async (req, res) => {
   const d = parsed.data;
   const pinHash = await hashPin(d.pin);
 
-  // PIN collision guard
-  const { rows: actives } = await query<{ id: number; pin_hash: string }>(
-    `SELECT id, pin_hash FROM timeclock.users WHERE active = true`,
+  // PIN collision guard — check against every existing PIN (primary + remote).
+  const { rows: actives } = await query<{
+    id: number;
+    pin_hash: string | null;
+    pin_hash_remote: string | null;
+  }>(
+    `SELECT id, pin_hash, pin_hash_remote FROM timeclock.users WHERE active = true`,
   );
   for (const u of actives) {
-    if (await bcrypt.compare(d.pin, u.pin_hash)) {
+    if (u.pin_hash && (await bcrypt.compare(d.pin, u.pin_hash))) {
+      res.status(409).json({ error: 'PIN already in use — pick a different one.' });
+      return;
+    }
+    if (u.pin_hash_remote && (await bcrypt.compare(d.pin, u.pin_hash_remote))) {
       res.status(409).json({ error: 'PIN already in use — pick a different one.' });
       return;
     }

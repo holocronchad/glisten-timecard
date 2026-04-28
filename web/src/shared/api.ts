@@ -1,4 +1,7 @@
-const BASE = '';
+// API endpoints live under /api/* on the server so the SPA can own /,
+// /me, /manage/* etc. as React routes. Vite dev proxy + production nginx
+// both forward /api/* to the Express backend.
+const BASE = '/api';
 
 type FetchOpts = {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';

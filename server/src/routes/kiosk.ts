@@ -51,7 +51,7 @@ router.post('/lookup', async (req, res) => {
     return;
   }
 
-  const user = result.user;
+  const { user, usedRemotePin } = result;
 
   // Manager / owner → mint a JWT and route the kiosk to the manager portal.
   // We do this BEFORE the track_hours check so owners (track_hours = false)
@@ -107,7 +107,11 @@ router.post('/lookup', async (req, res) => {
     } : null,
     allowed_actions: allowed,
     location: inOffice,
-    geofence_required: true,
+    // True only when the standard (geofence-required) PIN was used. WFH PIN
+    // sets this to false → frontend can show a "Working from home" indicator
+    // and skip the "outside office" warning.
+    geofence_required: !usedRemotePin,
+    bypass_geofence: usedRemotePin,
     cpr: {
       org: user.cpr_org,
       issued_at: user.cpr_issued_at,
@@ -119,9 +123,17 @@ router.post('/lookup', async (req, res) => {
 });
 
 // ── POST /kiosk/register ───────────────────────────────────────────────────
-// New employee onboarding from the kiosk. Geofenced (must be at an office).
-// Creates a user with approved = false; their punches are collected but
-// excluded from payroll until a manager approves.
+// New employee onboarding from the kiosk. Two paths:
+//
+// 1. ROSTER MATCH — first+last name matches a manager-preloaded user with
+//    pin_hash IS NULL. Sets that user's PIN; user is fully active immediately
+//    (rate, role, employment_type already filled in by the import script).
+//
+// 2. NO MATCH — falls back to legacy self-register: creates a new user with
+//    approved=false. Punches collected, excluded from payroll until a
+//    manager approves on the Pending tab.
+//
+// Both paths require geofence (must be inside an office).
 const registerSchema = z.object({
   first_name: z.string().trim().min(1).max(60),
   last_name: z.string().trim().min(1).max(60),
@@ -151,12 +163,23 @@ router.post('/register', async (req, res) => {
     return;
   }
 
-  // PIN collision guard — same defensive check used in manager-create-staff.
-  const { rows: actives } = await query<{ id: number; pin_hash: string }>(
-    `SELECT id, pin_hash FROM timeclock.users WHERE active = true`,
+  // PIN collision guard — check against every existing PIN (primary + remote).
+  const { rows: actives } = await query<{
+    id: number;
+    pin_hash: string | null;
+    pin_hash_remote: string | null;
+  }>(
+    `SELECT id, pin_hash, pin_hash_remote FROM timeclock.users WHERE active = true`,
   );
   for (const u of actives) {
-    if (await bcrypt.compare(pin, u.pin_hash)) {
+    if (u.pin_hash && (await bcrypt.compare(pin, u.pin_hash))) {
+      res.status(409).json({
+        error: 'PIN already in use',
+        message: 'That PIN is already taken — pick a different one.',
+      });
+      return;
+    }
+    if (u.pin_hash_remote && (await bcrypt.compare(pin, u.pin_hash_remote))) {
       res.status(409).json({
         error: 'PIN already in use',
         message: 'That PIN is already taken — pick a different one.',
@@ -172,6 +195,68 @@ router.post('/register', async (req, res) => {
     req.ip ||
     null;
 
+  // Roster-match path: case-insensitive first+last match against a row with
+  // pin_hash IS NULL. We accept either order ("John Smith" or "Smith, John")
+  // by checking the parts; the canonical stored form is "First Last".
+  const { rows: rosterMatches } = await query<{
+    id: number;
+    name: string;
+    role: string;
+    employment_type: string;
+  }>(
+    `SELECT id, name, role, employment_type
+     FROM timeclock.users
+     WHERE active = true
+       AND pin_hash IS NULL
+       AND (
+         LOWER(name) = LOWER($1)
+         OR LOWER(name) LIKE LOWER($2)
+         OR LOWER(name) LIKE LOWER($3)
+       )`,
+    [fullName, `${first_name}%${last_name}`, `${last_name}%${first_name}`],
+  );
+
+  if (rosterMatches.length === 1) {
+    // Roster hit — fill in the PIN, leave everything else untouched.
+    const matched = rosterMatches[0];
+    await query(
+      `UPDATE timeclock.users
+       SET pin_hash = $1, approved = true, updated_at = NOW()
+       WHERE id = $2`,
+      [pinHash, matched.id],
+    );
+    await query(
+      `INSERT INTO timeclock.audit_log
+         (actor_user_id, resource_type, resource_id, action, after_state, reason, ip)
+       VALUES (NULL, 'user', $1, 'roster_pin_set',
+               $2::jsonb, $3, $4)`,
+      [
+        matched.id,
+        JSON.stringify({ id: matched.id, name: matched.name, location_id: office.id }),
+        `Employee set their own PIN at kiosk (matched roster row "${matched.name}")`,
+        ip,
+      ],
+    );
+    res.status(200).json({
+      user: { id: matched.id, name: matched.name, approved: true },
+      message: `Welcome, ${first_name}. You're all set — just enter your PIN whenever you punch.`,
+      roster_matched: true,
+    });
+    return;
+  }
+
+  if (rosterMatches.length > 1) {
+    // Ambiguous — multiple roster rows match this name. Defer to a manager
+    // rather than guess. Rare but possible (e.g. two "Maria Garcia"s).
+    res.status(409).json({
+      error: 'Multiple matches',
+      message: 'More than one staff record matches that name — please ask a manager to set up your PIN.',
+    });
+    return;
+  }
+
+  // No roster match — legacy self-register path. User created with
+  // approved=false; manager must approve before payroll counts the hours.
   const { rows: inserted } = await query<{ id: number; name: string }>(
     `INSERT INTO timeclock.users
        (name, pin_hash, role, employment_type, is_owner, is_manager,
@@ -186,7 +271,7 @@ router.post('/register', async (req, res) => {
     `INSERT INTO timeclock.audit_log
        (actor_user_id, resource_type, resource_id, action, after_state, reason, ip)
      VALUES (NULL, 'user', $1, 'self_register',
-             $2::jsonb, 'self-registered at kiosk (pending approval)', $3)`,
+             $2::jsonb, 'self-registered at kiosk (no roster match — pending approval)', $3)`,
     [
       user.id,
       JSON.stringify({ id: user.id, name: user.name, location_id: office.id }),
@@ -197,6 +282,7 @@ router.post('/register', async (req, res) => {
   res.status(201).json({
     user: { id: user.id, name: user.name, approved: false },
     message: `Welcome, ${first_name}. You're set up — just enter your PIN to clock in.`,
+    roster_matched: false,
   });
 });
 
@@ -288,22 +374,31 @@ router.post('/punch', async (req, res) => {
     res.status(401).json({ error: result.reason === 'locked' ? 'Locked' : 'Invalid PIN' });
     return;
   }
-  const user = result.user;
+  const { user, usedRemotePin } = result;
   if (!user.track_hours) {
     res.status(403).json({ error: 'This account does not punch the clock' });
     return;
   }
 
-  const { rows: locations } = await query(
-    `SELECT id, lat, lng, geofence_m, active FROM timeclock.locations WHERE active = true`
-  );
-  const office = matchLocation({ lat, lng }, locations as any);
-  if (!office) {
-    res.status(403).json({
-      error: 'Outside office',
-      message: 'You can only punch when you are at a Glisten Dental office.',
-    });
-    return;
+  // WFH PIN bypass — skip the geofence check entirely. We still record the
+  // punch with whatever lat/lng the browser reported (audit log) but no
+  // location_id, since the punch isn't tied to a specific office.
+  let officeId: number | null = null;
+  if (usedRemotePin) {
+    officeId = null;
+  } else {
+    const { rows: locations } = await query(
+      `SELECT id, lat, lng, geofence_m, active FROM timeclock.locations WHERE active = true`
+    );
+    const office = matchLocation({ lat, lng }, locations as any);
+    if (!office) {
+      res.status(403).json({
+        error: 'Outside office',
+        message: 'You can only punch when you are at a Glisten Dental office.',
+      });
+      return;
+    }
+    officeId = office.id;
   }
 
   const latest = await getLatestPunch(user.id);
@@ -325,20 +420,24 @@ router.post('/punch', async (req, res) => {
 
   const punch = await recordPunch({
     userId: user.id,
-    locationId: office.id,
+    locationId: officeId,
     type: type as PunchType,
     source: 'kiosk',
     ip,
     lat,
     lng,
+    // Remote-PIN punches set geofencePass = true (the punch is allowed) but
+    // location_id is null — the punch shows up flagged-as-remote on manager
+    // views via the null location_id rather than a flag column.
     geofencePass: true,
   });
 
   res.json({
     punch: { id: punch.id, type: punch.type, ts: punch.ts },
     message: messageFor(type as PunchType, user.name),
-    location_id: office.id,
+    location_id: officeId,
     pending_approval: !user.approved,
+    remote_punch: usedRemotePin,
   });
 });
 

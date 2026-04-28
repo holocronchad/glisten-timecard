@@ -42,23 +42,23 @@ check "frontend index.html served" \
 # 3. Manager login rejects bad PIN (PIN-only — no username field).
 # `-s` not `-fs`: -f exits non-zero on 4xx and kills the pipeline under pipefail.
 check "manager login rejects bad PIN" \
-  "curl -s -o /dev/null -w '%{http_code}' -X POST '$BASE/manage/login' \
+  "curl -s -o /dev/null -w '%{http_code}' -X POST '$BASE/api/manage/login' \
     -H 'content-type: application/json' \
     -d '{\"pin\":\"9999\"}' | grep -qE '401|404'"
 
 # 4. Manager endpoints require auth
 check "manager today requires auth" \
-  "curl -s -o /dev/null -w '%{http_code}' '$BASE/manage/today' | grep -q 401"
+  "curl -s -o /dev/null -w '%{http_code}' '$BASE/api/manage/today' | grep -q 401"
 
 # 5. Kiosk lookup rejects malformed PIN
 check "kiosk lookup rejects malformed PIN" \
-  "curl -s -o /dev/null -w '%{http_code}' -X POST '$BASE/kiosk/lookup' \
+  "curl -s -o /dev/null -w '%{http_code}' -X POST '$BASE/api/kiosk/lookup' \
     -H 'content-type: application/json' \
     -d '{\"pin\":\"abc\"}' | grep -q 400"
 
 # 6. Kiosk punch requires geofence coords
 check "kiosk punch rejects missing coords" \
-  "curl -s -o /dev/null -w '%{http_code}' -X POST '$BASE/kiosk/punch' \
+  "curl -s -o /dev/null -w '%{http_code}' -X POST '$BASE/api/kiosk/punch' \
     -H 'content-type: application/json' \
     -d '{\"pin\":\"1111\",\"type\":\"clock_in\"}' | grep -q 400"
 

@@ -20,8 +20,9 @@ export default defineConfig({
     port: 5173,
     host: true, // listen on 0.0.0.0 so phones on the LAN can connect
     proxy: {
-      '/kiosk':   { target: 'http://localhost:3001', changeOrigin: true, bypass: passThroughHtmlNav },
-      '/manage':  { target: 'http://localhost:3001', changeOrigin: true, bypass: passThroughHtmlNav },
+      // All API calls go through /api/* so the SPA can own /, /me, /manage/*
+      // as React routes without colliding with the Express handlers.
+      '/api':     { target: 'http://localhost:3001', changeOrigin: true, bypass: passThroughHtmlNav },
       '/health':  { target: 'http://localhost:3001', changeOrigin: true, bypass: passThroughHtmlNav },
     },
   },

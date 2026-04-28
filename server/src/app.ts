@@ -78,10 +78,14 @@ export function buildApp() {
     legacyHeaders: false,
   });
 
+  // All API endpoints live under /api/* — frees up /, /me, /manage/* for the
+  // SPA's React routes. Nginx proxies /api/* + /health to this server; the
+  // SPA's index.html is served for everything else.
   app.use('/health', healthRouter);
-  app.use('/kiosk', pinLimiter, kioskRouter);
-  app.use('/manage/login', loginLimiter);
-  app.use('/manage', manageRouter);
+  app.use('/api/health', healthRouter);
+  app.use('/api/kiosk', pinLimiter, kioskRouter);
+  app.use('/api/manage/login', loginLimiter);
+  app.use('/api/manage', manageRouter);
 
   app.get('/', (_req, res) => {
     res.json({ service: 'glisten-timecard', message: 'Backend up. UI is served separately.' });

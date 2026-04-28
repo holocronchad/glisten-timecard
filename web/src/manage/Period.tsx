@@ -44,7 +44,7 @@ export default function Period() {
 
   function downloadCsv() {
     if (!data || !user?.is_owner) return;
-    const url = `/manage/payroll.csv?index=${data.period.index}`;
+    const url = `/api/manage/payroll.csv?index=${data.period.index}`;
     fetch(url, { headers: { authorization: `Bearer ${token}` } })
       .then((r) => r.blob())
       .then((blob) => {

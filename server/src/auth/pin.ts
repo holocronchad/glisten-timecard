@@ -11,7 +11,8 @@ import { query } from '../db';
 export interface UserRow {
   id: number;
   name: string;
-  pin_hash: string;
+  pin_hash: string | null;
+  pin_hash_remote: string | null;
   is_owner: boolean;
   is_manager: boolean;
   track_hours: boolean;
@@ -27,7 +28,7 @@ export interface UserRow {
 }
 
 export type PinResult =
-  | { ok: true; user: UserRow }
+  | { ok: true; user: UserRow; usedRemotePin: boolean }
   | { ok: false; reason: 'invalid_pin' | 'locked' | 'no_match' | 'inactive'; lockedUntil?: Date };
 
 /**
@@ -46,18 +47,24 @@ export async function findUserByPin(pin: string): Promise<PinResult> {
   }
 
   const { rows } = await query<UserRow>(
-    `SELECT id, name, pin_hash, is_owner, is_manager, track_hours, active, approved,
+    `SELECT id, name, pin_hash, pin_hash_remote,
+            is_owner, is_manager, track_hours, active, approved,
             cpr_org, cpr_issued_at, cpr_expires_at, cpr_updated_at,
             pin_locked_until, pin_fail_count, pin_fail_window_start
      FROM timeclock.users
-     WHERE active = true`
+     WHERE active = true
+       AND (pin_hash IS NOT NULL OR pin_hash_remote IS NOT NULL)`
   );
 
-  // Find the user(s) whose pin_hash matches. bcrypt comparison is constant-time.
-  const matches: UserRow[] = [];
+  // Find the user(s) whose pin_hash OR pin_hash_remote matches. bcrypt
+  // comparison is constant-time. usedRemotePin distinguishes which PIN
+  // matched so /kiosk/punch can decide whether to skip the geofence check.
+  const matches: { user: UserRow; usedRemotePin: boolean }[] = [];
   for (const u of rows) {
-    if (await bcrypt.compare(pin, u.pin_hash)) {
-      matches.push(u);
+    if (u.pin_hash && (await bcrypt.compare(pin, u.pin_hash))) {
+      matches.push({ user: u, usedRemotePin: false });
+    } else if (u.pin_hash_remote && (await bcrypt.compare(pin, u.pin_hash_remote))) {
+      matches.push({ user: u, usedRemotePin: true });
     }
   }
 
@@ -69,7 +76,7 @@ export async function findUserByPin(pin: string): Promise<PinResult> {
     return { ok: false, reason: 'no_match' };
   }
 
-  const user = matches[0];
+  const { user, usedRemotePin } = matches[0];
 
   // Honor active lockout
   if (user.pin_locked_until && user.pin_locked_until > new Date()) {
@@ -86,7 +93,7 @@ export async function findUserByPin(pin: string): Promise<PinResult> {
     );
   }
 
-  return { ok: true, user };
+  return { ok: true, user, usedRemotePin };
 }
 
 /**
