@@ -8,8 +8,9 @@ import { ListSkeleton } from './Skeleton';
 
 type TodayResponse = {
   today: string;
+  pending_count: number;
   employees: Array<{
-    user: { id: number; name: string; role: string };
+    user: { id: number; name: string; role: string; approved: boolean; self_registered: boolean };
     status: 'on_clock' | 'on_lunch' | 'off';
     worked_minutes_today: number;
     last_punch: { id: number; type: string; ts: string; flagged: boolean } | null;
@@ -112,7 +113,14 @@ export default function Today() {
                 className="flex items-center gap-4 p-5 hover:bg-creamSoft/5 transition-colors cursor-pointer"
               >
                 <div className="flex-1">
-                  <div className="text-creamSoft text-base tracking-tight">{e.user.name}</div>
+                  <div className="text-creamSoft text-base tracking-tight flex items-center gap-2">
+                    {e.user.name}
+                    {!e.user.approved && (
+                      <span className="rounded-full bg-amber-300/15 text-amber-300 border border-amber-300/30 text-[10px] tracking-[0.12em] uppercase px-2 py-0.5">
+                        Pending approval
+                      </span>
+                    )}
+                  </div>
                   <div className="text-creamSoft/40 text-xs tracking-tight">{e.user.role}</div>
                 </div>
                 <div

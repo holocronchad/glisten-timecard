@@ -1,20 +1,26 @@
 // Kiosk endpoints — used by the front-desk PC kiosk + personal phones.
 // PIN-only auth, no persistent session: every action submits PIN + lat/lng.
+//
+// Lookup is now a discriminated response:
+//   404 Unknown PIN              → frontend offers self-register
+//   200 { kind: 'manager', ...}  → frontend stores token + redirects to /manage
+//   200 { kind: 'employee', ...} → frontend proceeds to NameReveal + punch flow
 
 import { Router } from 'express';
+import bcrypt from 'bcrypt';
 import { z } from 'zod';
-import { findUserByPin } from '../auth/pin';
+import { findUserByPin, hashPin } from '../auth/pin';
+import { signManagerToken } from '../auth/jwt';
 import { matchLocation } from '../services/geofence';
 import {
   getLatestPunch, nextAllowedPunches, recordPunch, type PunchType,
 } from '../services/punches';
+import { cprDaysUntil } from '../services/cpr';
 import { query } from '../db';
 
 const router = Router();
 
 // ── POST /kiosk/lookup ─────────────────────────────────────────────────────
-// Body: { pin: '1234', lat?: number, lng?: number }
-// Returns: { user: {id,name,track_hours}, allowedActions: [...], lastPunch, location }
 const lookupSchema = z.object({
   pin: z.string().regex(/^\d{4}$/),
   lat: z.number().min(-90).max(90).optional(),
@@ -40,11 +46,35 @@ router.post('/lookup', async (req, res) => {
       });
       return;
     }
-    res.status(401).json({ error: 'Invalid PIN' });
+    // Unknown PIN — frontend offers the self-register flow.
+    res.status(404).json({ error: 'Unknown PIN', kind: 'unknown' });
     return;
   }
 
   const user = result.user;
+
+  // Manager / owner → mint a JWT and route the kiosk to the manager portal.
+  // We do this BEFORE the track_hours check so owners (track_hours = false)
+  // are routed correctly.
+  if (user.is_owner || user.is_manager) {
+    const token = signManagerToken({
+      user_id: user.id,
+      is_owner: user.is_owner,
+      is_manager: user.is_manager,
+    });
+    res.json({
+      kind: 'manager',
+      token,
+      user: {
+        id: user.id,
+        name: user.name,
+        is_owner: user.is_owner,
+        is_manager: user.is_manager,
+      },
+    });
+    return;
+  }
+
   if (!user.track_hours) {
     res.status(403).json({ error: 'This account does not punch the clock' });
     return;
@@ -63,7 +93,12 @@ router.post('/lookup', async (req, res) => {
   const allowed = nextAllowedPunches(latest);
 
   res.json({
-    user: { id: user.id, name: user.name },
+    kind: 'employee',
+    user: {
+      id: user.id,
+      name: user.name,
+      approved: user.approved,
+    },
     last_punch: latest ? {
       type: latest.type,
       ts: latest.ts,
@@ -73,12 +108,166 @@ router.post('/lookup', async (req, res) => {
     allowed_actions: allowed,
     location: inOffice,
     geofence_required: true,
+    cpr: {
+      org: user.cpr_org,
+      issued_at: user.cpr_issued_at,
+      expires_at: user.cpr_expires_at,
+      updated_at: user.cpr_updated_at,
+      days_until_expiry: cprDaysUntil(user.cpr_expires_at),
+    },
+  });
+});
+
+// ── POST /kiosk/register ───────────────────────────────────────────────────
+// New employee onboarding from the kiosk. Geofenced (must be at an office).
+// Creates a user with approved = false; their punches are collected but
+// excluded from payroll until a manager approves.
+const registerSchema = z.object({
+  first_name: z.string().trim().min(1).max(60),
+  last_name: z.string().trim().min(1).max(60),
+  pin: z.string().regex(/^\d{4}$/),
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+});
+
+router.post('/register', async (req, res) => {
+  const parsed = registerSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Bad request', issues: parsed.error.issues });
+    return;
+  }
+  const { first_name, last_name, pin, lat, lng } = parsed.data;
+
+  // Geofence — required so anyone in Phoenix can't self-onboard from their phone.
+  const { rows: locations } = await query(
+    `SELECT id, lat, lng, geofence_m, active FROM timeclock.locations WHERE active = true`
+  );
+  const office = matchLocation({ lat, lng }, locations as any);
+  if (!office) {
+    res.status(403).json({
+      error: 'Outside office',
+      message: 'You can only register a new account from a Glisten Dental office.',
+    });
+    return;
+  }
+
+  // PIN collision guard — same defensive check used in manager-create-staff.
+  const { rows: actives } = await query<{ id: number; pin_hash: string }>(
+    `SELECT id, pin_hash FROM timeclock.users WHERE active = true`,
+  );
+  for (const u of actives) {
+    if (await bcrypt.compare(pin, u.pin_hash)) {
+      res.status(409).json({
+        error: 'PIN already in use',
+        message: 'That PIN is already taken — pick a different one.',
+      });
+      return;
+    }
+  }
+
+  const fullName = `${first_name} ${last_name}`.replace(/\s+/g, ' ').trim();
+  const pinHash = await hashPin(pin);
+  const ip =
+    (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+    req.ip ||
+    null;
+
+  const { rows: inserted } = await query<{ id: number; name: string }>(
+    `INSERT INTO timeclock.users
+       (name, pin_hash, role, employment_type, is_owner, is_manager,
+        track_hours, active, approved, self_registered)
+     VALUES ($1, $2, 'staff', 'W2', false, false, true, true, false, true)
+     RETURNING id, name`,
+    [fullName, pinHash],
+  );
+  const user = inserted[0];
+
+  await query(
+    `INSERT INTO timeclock.audit_log
+       (actor_user_id, resource_type, resource_id, action, after_state, reason, ip)
+     VALUES (NULL, 'user', $1, 'self_register',
+             $2::jsonb, 'self-registered at kiosk (pending approval)', $3)`,
+    [
+      user.id,
+      JSON.stringify({ id: user.id, name: user.name, location_id: office.id }),
+      ip,
+    ],
+  );
+
+  res.status(201).json({
+    user: { id: user.id, name: user.name, approved: false },
+    message: `Welcome, ${first_name}. You're set up — just enter your PIN to clock in.`,
+  });
+});
+
+// ── POST /kiosk/cpr ────────────────────────────────────────────────────────
+// Update CPR cert info from the kiosk. PIN-authenticated, no manager
+// involvement needed — employees can keep their own cert current.
+const cprSchema = z.object({
+  pin: z.string().regex(/^\d{4}$/),
+  org: z.string().trim().min(1).max(120),
+  issued_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+router.post('/cpr', async (req, res) => {
+  const parsed = cprSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Bad request', issues: parsed.error.issues });
+    return;
+  }
+  const { pin, org, issued_at, expires_at } = parsed.data;
+
+  if (issued_at >= expires_at) {
+    res.status(400).json({
+      error: 'Bad dates',
+      message: 'Expiry must be after the issued date.',
+    });
+    return;
+  }
+
+  const result = await findUserByPin(pin);
+  if (!result.ok) {
+    res.status(401).json({ error: result.reason === 'locked' ? 'Locked' : 'Invalid PIN' });
+    return;
+  }
+  const user = result.user;
+
+  const { rows } = await query<{
+    cpr_org: string;
+    cpr_issued_at: Date;
+    cpr_expires_at: Date;
+    cpr_updated_at: Date;
+  }>(
+    `UPDATE timeclock.users
+     SET cpr_org = $1,
+         cpr_issued_at = $2,
+         cpr_expires_at = $3,
+         cpr_updated_at = NOW()
+     WHERE id = $4
+     RETURNING cpr_org, cpr_issued_at, cpr_expires_at, cpr_updated_at`,
+    [org, issued_at, expires_at, user.id],
+  );
+
+  await query(
+    `INSERT INTO timeclock.audit_log
+       (actor_user_id, resource_type, resource_id, action, after_state, reason)
+     VALUES ($1, 'user', $2, 'cpr_update', $3::jsonb, 'CPR cert updated by employee')`,
+    [user.id, user.id, JSON.stringify(rows[0])],
+  );
+
+  res.json({
+    cpr: {
+      org: rows[0].cpr_org,
+      issued_at: rows[0].cpr_issued_at,
+      expires_at: rows[0].cpr_expires_at,
+      updated_at: rows[0].cpr_updated_at,
+      days_until_expiry: cprDaysUntil(rows[0].cpr_expires_at),
+    },
   });
 });
 
 // ── POST /kiosk/punch ──────────────────────────────────────────────────────
-// Body: { pin, type: 'clock_in'|..., lat, lng }
-// Returns: { punch: {id,type,ts}, message }
 const punchSchema = z.object({
   pin: z.string().regex(/^\d{4}$/),
   type: z.enum(['clock_in', 'clock_out', 'lunch_start', 'lunch_end']),
@@ -105,7 +294,6 @@ router.post('/punch', async (req, res) => {
     return;
   }
 
-  // Geofence — required for actual punch (lookup was informational)
   const { rows: locations } = await query(
     `SELECT id, lat, lng, geofence_m, active FROM timeclock.locations WHERE active = true`
   );
@@ -118,7 +306,6 @@ router.post('/punch', async (req, res) => {
     return;
   }
 
-  // Validate the requested transition
   const latest = await getLatestPunch(user.id);
   const allowed = nextAllowedPunches(latest);
   if (!allowed.includes(type as PunchType)) {
@@ -151,6 +338,7 @@ router.post('/punch', async (req, res) => {
     punch: { id: punch.id, type: punch.type, ts: punch.ts },
     message: messageFor(type as PunchType, user.name),
     location_id: office.id,
+    pending_approval: !user.approved,
   });
 });
 
@@ -165,8 +353,6 @@ function messageFor(type: PunchType, name: string): string {
 }
 
 // ── POST /kiosk/missed-punch ───────────────────────────────────────────────
-// Employee submits "I forgot to clock in/out at <time>" — manager approves
-// or denies in /manage/missed. PIN-only, no geofence required.
 const missedSchema = z.object({
   pin: z.string().regex(/^\d{4}$/),
   type: z.enum(['clock_in', 'clock_out', 'lunch_start', 'lunch_end']),
@@ -224,8 +410,6 @@ router.post('/missed-punch', async (req, res) => {
 });
 
 // ── POST /kiosk/me ─────────────────────────────────────────────────────────
-// Read-only "view my hours" — PIN in body, no geofence, no state change.
-// Used by the personal-view (`/me`) page on the employee's own phone.
 const meSchema = z.object({ pin: z.string().regex(/^\d{4}$/) });
 
 router.post('/me', async (req, res) => {
@@ -256,11 +440,18 @@ router.post('/me', async (req, res) => {
   for (const l of locations as any[]) locName.set(l.id, l.name);
 
   res.json({
-    user: { id: user.id, name: user.name },
+    user: { id: user.id, name: user.name, approved: user.approved },
     punches: (punches as any[]).map((p) => ({
       ...p,
       location_name: p.location_id ? locName.get(p.location_id) ?? null : null,
     })),
+    cpr: {
+      org: user.cpr_org,
+      issued_at: user.cpr_issued_at,
+      expires_at: user.cpr_expires_at,
+      updated_at: user.cpr_updated_at,
+      days_until_expiry: cprDaysUntil(user.cpr_expires_at),
+    },
   });
 });
 

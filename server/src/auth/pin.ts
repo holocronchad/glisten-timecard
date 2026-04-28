@@ -16,6 +16,11 @@ export interface UserRow {
   is_manager: boolean;
   track_hours: boolean;
   active: boolean;
+  approved: boolean;
+  cpr_org: string | null;
+  cpr_issued_at: Date | null;
+  cpr_expires_at: Date | null;
+  cpr_updated_at: Date | null;
   pin_locked_until: Date | null;
   pin_fail_count: number;
   pin_fail_window_start: Date | null;
@@ -41,7 +46,8 @@ export async function findUserByPin(pin: string): Promise<PinResult> {
   }
 
   const { rows } = await query<UserRow>(
-    `SELECT id, name, pin_hash, is_owner, is_manager, track_hours, active,
+    `SELECT id, name, pin_hash, is_owner, is_manager, track_hours, active, approved,
+            cpr_org, cpr_issued_at, cpr_expires_at, cpr_updated_at,
             pin_locked_until, pin_fail_count, pin_fail_window_start
      FROM timeclock.users
      WHERE active = true`

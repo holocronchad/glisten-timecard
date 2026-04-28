@@ -1,9 +1,11 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from './auth';
+import { api } from '../shared/api';
 
 const TABS = [
   { to: 'today', label: 'Today' },
+  { to: 'pending', label: 'Pending', badge: true },
   { to: 'missed', label: 'Missed' },
   { to: 'period', label: 'Pay period' },
   { to: 'punches', label: 'Punches' },
@@ -13,13 +15,40 @@ const TABS = [
 ];
 
 export default function ManageShell({ children }: { children?: ReactNode }) {
-  const { user, clear } = useAuth();
+  const { token, user, clear } = useAuth();
   const nav = useNavigate();
+  const [pendingCount, setPendingCount] = useState(0);
 
   function logout() {
     clear();
     nav('/manage/login', { replace: true });
   }
+
+  // Poll the Today endpoint for pending_count so the Pending tab badge stays
+  // current. Today is already polled every 30s by the Today view; we duplicate
+  // here so the badge is up-to-date even when the manager is on another tab.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    async function load() {
+      try {
+        const r = await api<{ pending_count: number }>('/manage/today', {
+          token: token ?? undefined,
+        });
+        if (!cancelled) setPendingCount(r.pending_count ?? 0);
+      } catch {
+        /* ignore */
+      }
+    }
+    load();
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') load();
+    }, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [token]);
 
   return (
     <div className="bg-noise min-h-[100dvh] flex flex-col">
@@ -29,20 +58,25 @@ export default function ManageShell({ children }: { children?: ReactNode }) {
             Glisten Timecard
           </span>
           <nav className="flex gap-1">
-            {TABS.filter((t) => !t.ownerOnly || user?.is_owner).map((t) => (
+            {TABS.filter((t) => !(t as any).ownerOnly || user?.is_owner).map((t) => (
               <NavLink
                 key={t.to}
                 to={t.to}
                 className={({ isActive }) =>
                   [
-                    'px-4 py-1.5 rounded-full text-sm tracking-tight transition-colors',
+                    'px-4 py-1.5 rounded-full text-sm tracking-tight transition-colors flex items-center gap-2',
                     isActive
                       ? 'bg-cream text-ink'
                       : 'text-creamSoft/60 hover:text-creamSoft/90 hover:bg-creamSoft/5',
                   ].join(' ')
                 }
               >
-                {t.label}
+                <span>{t.label}</span>
+                {(t as any).badge && pendingCount > 0 && (
+                  <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-amber-300 text-ink text-[10px] font-bold tabular-nums">
+                    {pendingCount}
+                  </span>
+                )}
               </NavLink>
             ))}
           </nav>

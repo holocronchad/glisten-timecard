@@ -38,9 +38,13 @@ export async function payrollForPeriod(
     employment_type: string;
     track_hours: boolean;
   }>(
+    // Self-registered employees awaiting manager approval are excluded from
+    // payroll until approved. Their punches are still recorded in the punches
+    // table — they just don't roll up here. Approving the user lights up
+    // every prior punch retroactively.
     `SELECT id, name, role, employment_type, track_hours
      FROM timeclock.users
-     WHERE active = true AND track_hours = true
+     WHERE active = true AND track_hours = true AND approved = true
      ORDER BY name`,
   );
 

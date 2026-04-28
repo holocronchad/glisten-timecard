@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { query, withTransaction } from '../db';
 import { requireManager, requireOwner } from '../auth/middleware';
 import { signManagerToken } from '../auth/jwt';
-import { hashPin } from '../auth/pin';
+import { findUserByPin, hashPin } from '../auth/pin';
 import {
   recordPunch,
   type PunchType,
@@ -23,11 +23,10 @@ import { config } from '../config';
 const router = Router();
 
 // ── POST /manage/login ─────────────────────────────────────────────────────
-// Username + 4-digit PIN. Same bcrypt lookup used for kiosk PINs but scoped
-// to the row that matches the username so we don't leak whether a username
-// exists.
+// PIN-only manager login. The same bcrypt hash that gates the kiosk gates the
+// portal — but we filter for is_owner OR is_manager. PIN brute-force lockout
+// is enforced via findUserByPin.
 const loginSchema = z.object({
-  username: z.string().min(2).max(60),
   pin: z.string().regex(/^\d{4}$/),
 });
 
@@ -37,30 +36,23 @@ router.post('/login', async (req, res) => {
     res.status(400).json({ error: 'Bad request' });
     return;
   }
-  const { username, pin } = parsed.data;
-  const { rows } = await query<{
-    id: number;
-    name: string;
-    pin_hash: string;
-    is_owner: boolean;
-    is_manager: boolean;
-    active: boolean;
-  }>(
-    `SELECT id, name, pin_hash, is_owner, is_manager, active
-     FROM timeclock.users
-     WHERE LOWER(username) = LOWER($1) AND active = true`,
-    [username.trim()],
-  );
-  const user = rows[0];
-  if (!user) {
-    res.status(401).json({ error: 'Invalid username or PIN' });
+  const { pin } = parsed.data;
+
+  const result = await findUserByPin(pin);
+  if (!result.ok) {
+    if (result.reason === 'locked') {
+      res.status(429).json({
+        error: 'Locked',
+        message: 'Too many wrong attempts. Try again in a few minutes.',
+        locked_until: result.lockedUntil?.toISOString(),
+      });
+      return;
+    }
+    res.status(401).json({ error: 'Invalid PIN' });
     return;
   }
-  const ok = await bcrypt.compare(pin, user.pin_hash);
-  if (!ok) {
-    res.status(401).json({ error: 'Invalid username or PIN' });
-    return;
-  }
+
+  const user = result.user;
   if (!user.is_manager && !user.is_owner) {
     res.status(403).json({ error: 'Not a manager' });
     return;
@@ -101,8 +93,10 @@ router.get('/today', async (_req, res) => {
     id: number;
     name: string;
     role: string;
+    approved: boolean;
+    self_registered: boolean;
   }>(
-    `SELECT id, name, role
+    `SELECT id, name, role, approved, self_registered
      FROM timeclock.users
      WHERE active = true AND track_hours = true
      ORDER BY name`,
@@ -154,7 +148,144 @@ router.get('/today', async (_req, res) => {
     };
   });
 
-  res.json({ today, employees: out });
+  res.json({
+    today,
+    employees: out,
+    pending_count: users.filter((u) => !u.approved).length,
+  });
+});
+
+// ── GET /manage/pending ────────────────────────────────────────────────────
+// Self-registered employees awaiting manager approval.
+router.get('/pending', async (_req, res) => {
+  const { rows } = await query(
+    `SELECT u.id, u.name, u.role, u.created_at, u.cpr_org, u.cpr_expires_at,
+            COUNT(p.id) AS punch_count,
+            MIN(p.ts) AS first_punch_at,
+            MAX(p.ts) AS last_punch_at
+     FROM timeclock.users u
+     LEFT JOIN timeclock.punches p ON p.user_id = u.id
+     WHERE u.active = true AND u.approved = false AND u.track_hours = true
+     GROUP BY u.id
+     ORDER BY u.created_at DESC`,
+  );
+  res.json({ pending: rows });
+});
+
+// ── POST /manage/users/:id/approve ─────────────────────────────────────────
+const decisionSchema = z.object({
+  reason: z.string().max(500).optional(),
+});
+
+router.post('/users/:id/approve', async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (Number.isNaN(id)) {
+    res.status(400).json({ error: 'Bad id' });
+    return;
+  }
+  const parsed = decisionSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Bad request' });
+    return;
+  }
+
+  type Result =
+    | { ok: true; user: any }
+    | { ok: false; status: number; error: string };
+
+  const result = await withTransaction<Result>(async (client) => {
+    const before = await client.query(
+      `SELECT id, name, approved FROM timeclock.users WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    if (before.rowCount === 0) {
+      return { ok: false, status: 404, error: 'Not found' };
+    }
+    if (before.rows[0].approved === true) {
+      return { ok: false, status: 409, error: 'Already approved' };
+    }
+    const updated = await client.query(
+      `UPDATE timeclock.users
+       SET approved = true, approved_by = $1, approved_at = NOW(), updated_at = NOW()
+       WHERE id = $2
+       RETURNING id, name, role, approved, approved_at`,
+      [req.auth!.user_id, id],
+    );
+    await client.query(
+      `INSERT INTO timeclock.audit_log
+         (actor_user_id, resource_type, resource_id, action, before_state, after_state, reason)
+       VALUES ($1, 'user', $2, 'approve', $3, $4, $5)`,
+      [
+        req.auth!.user_id,
+        id,
+        JSON.stringify(before.rows[0]),
+        JSON.stringify(updated.rows[0]),
+        parsed.data.reason ?? 'Approved self-registered employee',
+      ],
+    );
+    return { ok: true, user: updated.rows[0] };
+  });
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+  res.json({ user: result.user });
+});
+
+// ── POST /manage/users/:id/deny ────────────────────────────────────────────
+// Soft-delete: set active = false. Punches are kept for audit but excluded
+// from payroll because payroll filters active = true AND approved = true.
+router.post('/users/:id/deny', async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (Number.isNaN(id)) {
+    res.status(400).json({ error: 'Bad id' });
+    return;
+  }
+  const parsed = decisionSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Bad request' });
+    return;
+  }
+
+  type Result =
+    | { ok: true }
+    | { ok: false; status: number; error: string };
+
+  const result = await withTransaction<Result>(async (client) => {
+    const before = await client.query(
+      `SELECT id, name, approved, active FROM timeclock.users WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    if (before.rowCount === 0) {
+      return { ok: false, status: 404, error: 'Not found' };
+    }
+    if (before.rows[0].approved === true) {
+      return { ok: false, status: 409, error: 'Cannot deny an already-approved user' };
+    }
+    await client.query(
+      `UPDATE timeclock.users
+       SET active = false, updated_at = NOW()
+       WHERE id = $1`,
+      [id],
+    );
+    await client.query(
+      `INSERT INTO timeclock.audit_log
+         (actor_user_id, resource_type, resource_id, action, before_state, reason)
+       VALUES ($1, 'user', $2, 'deny', $3, $4)`,
+      [
+        req.auth!.user_id,
+        id,
+        JSON.stringify(before.rows[0]),
+        parsed.data.reason ?? 'Denied self-registered employee',
+      ],
+    );
+    return { ok: true };
+  });
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 // ── GET /manage/period ─────────────────────────────────────────────────────

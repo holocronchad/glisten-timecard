@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import PinPad from '../kiosk/PinPad';
@@ -14,37 +14,35 @@ type LoginResponse = {
 export default function Login() {
   const { setSession } = useAuth();
   const nav = useNavigate();
-  const [username, setUsername] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [shake, setShake] = useState(0);
 
   async function submit(pin: string) {
-    if (!username.trim()) {
-      setErr('Enter your username first.');
-      setShake((s) => s + 1);
-      return;
-    }
     setBusy(true);
     setErr(null);
     try {
       const r = await api<LoginResponse>('/manage/login', {
         method: 'POST',
-        body: { username: username.trim(), pin },
+        body: { pin },
       });
       setSession(r.token, r.user);
       nav('/manage/today', { replace: true });
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Login failed');
+      const msg =
+        e instanceof ApiError
+          ? e.status === 429
+            ? 'Too many attempts — try again in a few minutes.'
+            : e.status === 403
+              ? 'That PIN is not a manager PIN.'
+              : 'PIN not recognized.'
+          : 'Login failed';
+      setErr(msg);
       setShake((s) => s + 1);
     } finally {
       setBusy(false);
     }
   }
-
-  useEffect(() => {
-    setErr(null);
-  }, [username]);
 
   return (
     <div
@@ -80,21 +78,9 @@ export default function Login() {
               Manager <span className="font-serif italic text-cream">sign in</span>
             </h1>
             <p className="mt-1 text-creamSoft/50 text-sm">
-              Type your username, then your PIN.
+              Enter your 4-digit manager PIN.
             </p>
           </div>
-
-          <input
-            type="text"
-            inputMode="text"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            value={username}
-            onChange={(e) => setUsername(e.target.value.toLowerCase())}
-            placeholder="username"
-            className="w-full text-center bg-ink/40 border border-creamSoft/15 rounded-2xl px-4 py-3 text-creamSoft text-lg tracking-[0.04em] placeholder:text-creamSoft/30 focus:outline-none focus:border-cream/40 transition-colors"
-          />
 
           <PinPad
             onSubmit={submit}

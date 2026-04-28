@@ -1,10 +1,15 @@
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { LogIn, LogOut, Coffee, Utensils } from 'lucide-react';
-import { PunchType } from '../shared/api';
+import { CprState, PunchType } from '../shared/api';
+import CprPanel from './CprPanel';
 
 type Props = {
+  pin: string;
   greeting: string;
   name: string;
+  approved: boolean;
+  cpr: CprState;
   allowed: PunchType[];
   onChoose: (type: PunchType) => void;
   onCancel: () => void;
@@ -20,8 +25,11 @@ const META: Record<PunchType, { label: string; sub: string; icon: any }> = {
 };
 
 export default function NameReveal({
+  pin,
   greeting,
   name,
+  approved,
+  cpr: initialCpr,
   allowed,
   onChoose,
   onCancel,
@@ -29,9 +37,10 @@ export default function NameReveal({
   geofenceWarning,
 }: Props) {
   const first = name.split(' ')[0];
+  const [cpr, setCpr] = useState<CprState>(initialCpr);
 
   return (
-    <div className="flex flex-col items-center gap-10 w-full">
+    <div className="flex flex-col items-center gap-7 sm:gap-8 w-full">
       <div className="text-center">
         <motion.h1
           initial={{ y: 20, opacity: 0 }}
@@ -51,6 +60,17 @@ export default function NameReveal({
           What would you like to do?
         </motion.p>
       </div>
+
+      {!approved && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="text-amber-300/90 text-sm bg-amber-950/30 border border-amber-300/20 rounded-2xl px-4 py-2 max-w-[440px] text-center"
+        >
+          Your account is awaiting manager approval. You can punch in — your
+          time is being recorded — and it'll all count once a manager approves.
+        </motion.div>
+      )}
 
       {geofenceWarning && (
         <motion.div
@@ -97,7 +117,16 @@ export default function NameReveal({
         })}
       </div>
 
-      <div className="flex flex-col items-center gap-3 mt-2">
+      <motion.div
+        initial={{ y: 12, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.5, delay: 0.4 }}
+        className="w-full max-w-[480px]"
+      >
+        <CprPanel pin={pin} cpr={cpr} onUpdated={setCpr} />
+      </motion.div>
+
+      <div className="flex flex-col items-center gap-3 mt-1">
         <button
           type="button"
           onClick={onMissedPunch}

@@ -1,30 +1,45 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import PinPad from './PinPad';
 import NameReveal from './NameReveal';
 import Confirmation from './Confirmation';
 import MissedPunchModal from './MissedPunchModal';
+import RegisterModal from './RegisterModal';
 import CloudBackground from './CloudBackground';
-import { api, ApiError, LookupResponse, PunchResponse, PunchType } from '../shared/api';
+import {
+  api,
+  ApiError,
+  EmployeeLookup,
+  LookupResponse,
+  PunchResponse,
+  PunchType,
+} from '../shared/api';
 import { getCurrentPosition, greetingForHour } from '../shared/geo';
 import { vibrateError } from '../shared/feedback';
+
+// Must match STORAGE_KEY in src/manage/auth.tsx so AuthProvider picks it up
+// when the kiosk routes a manager into /manage.
+const SESSION_TOKEN_KEY = 'glisten-timecard-manager';
 
 type Phase =
   | { kind: 'pin' }
   | { kind: 'matching'; pin: string }
-  | { kind: 'name'; pin: string; lookup: LookupResponse }
+  | { kind: 'name'; pin: string; lookup: EmployeeLookup }
   | { kind: 'punching'; pin: string; type: PunchType }
   | { kind: 'confirm'; result: PunchResponse; userName: string };
 
 const IDLE_TIMEOUT_MS = 6000;
 
 export default function Kiosk() {
+  const nav = useNavigate();
   const [phase, setPhase] = useState<Phase>({ kind: 'pin' });
   const [shake, setShake] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsState, setGpsState] = useState<'pending' | 'ready' | 'denied'>('pending');
   const [now, setNow] = useState(new Date());
+  const [registerOpenForPin, setRegisterOpenForPin] = useState<string | null>(null);
 
   const requestGps = useCallback(() => {
     setGpsState('pending');
@@ -52,6 +67,7 @@ export default function Kiosk() {
     setError(null);
     setMissedOpen(false);
     setMissedConfirm(false);
+    setRegisterOpenForPin(null);
   }, []);
 
   useEffect(() => {
@@ -73,8 +89,28 @@ export default function Kiosk() {
         method: 'POST',
         body: { pin, lat: coords?.lat, lng: coords?.lng },
       });
+      // Manager / owner — store JWT and route to manager portal.
+      if (result.kind === 'manager') {
+        try {
+          localStorage.setItem(
+            SESSION_TOKEN_KEY,
+            JSON.stringify({ token: result.token, user: result.user }),
+          );
+        } catch {
+          // no-op if storage unavailable
+        }
+        nav('/manage/today', { replace: true });
+        return;
+      }
+      // Standard employee path
       setPhase({ kind: 'name', pin, lookup: result });
     } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        // Unknown PIN → offer self-register flow.
+        setRegisterOpenForPin(pin);
+        setPhase({ kind: 'pin' });
+        return;
+      }
       const msg =
         e instanceof ApiError
           ? e.status === 429
@@ -119,6 +155,13 @@ export default function Kiosk() {
     }
   }
 
+  async function handleRegistered(pin: string, _name: string) {
+    setRegisterOpenForPin(null);
+    // Re-run the lookup so we land in the regular employee flow with CPR
+    // panel + clock-in options. The user is now in the DB with approved=false.
+    await handlePin(pin);
+  }
+
   return (
     <div
       className="relative w-full text-creamSoft flex flex-col isolate overflow-hidden"
@@ -159,6 +202,13 @@ export default function Kiosk() {
                 {error && (
                   <p className="text-amber-300/80 text-sm text-center">{error}</p>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setRegisterOpenForPin('')}
+                  className="text-creamSoft/45 hover:text-creamSoft/80 text-xs tracking-[0.18em] uppercase transition-colors"
+                >
+                  New employee? Set up your PIN
+                </button>
               </motion.div>
             ) : phase.kind === 'name' ? (
               <motion.div
@@ -167,11 +217,14 @@ export default function Kiosk() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -12 }}
                 transition={{ duration: 0.35 }}
-                className="frosted-pane p-8 sm:p-10 rounded-[2rem]"
+                className="frosted-pane p-7 sm:p-9 rounded-[2rem]"
               >
                 <NameReveal
+                  pin={phase.pin}
                   greeting={greetingForHour()}
                   name={phase.lookup.user.name}
+                  approved={phase.lookup.user.approved}
+                  cpr={phase.lookup.cpr}
                   allowed={phase.lookup.allowed_actions}
                   onChoose={handlePunch}
                   onCancel={reset}
@@ -244,6 +297,17 @@ export default function Kiosk() {
                 reset();
               }, 2400);
             }}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {registerOpenForPin !== null && (
+          <RegisterModal
+            initialPin={registerOpenForPin}
+            coords={coords}
+            onClose={() => setRegisterOpenForPin(null)}
+            onRegistered={handleRegistered}
           />
         )}
       </AnimatePresence>
