@@ -1,7 +1,8 @@
-// One-time seed: insert the 3 Glisten offices + Annie Simmons (PIN 1111) +
-// Anas + Dr. Dawood as owners. Idempotent: re-running is safe.
+// One-time seed: insert the 3 Glisten offices + Anas + Dr. Dawood as owners.
+// Employees are loaded separately by `import-roster.ts` (no PINs — they
+// self-register at the kiosk). Idempotent: re-running is safe.
 //
-// Owner login is now PIN-only (no username) — Anas + Dr. Dawood get unique
+// Owner login is PIN-only (no username) — Anas + Dr. Dawood get unique
 // 4-digit PINs that route them straight into the manager portal from
 // either the kiosk or /manage. Defaults can be overridden via env.
 //
@@ -9,7 +10,6 @@
 // addresses. Geofence radius is 150m to absorb GPS jitter — front-desk PCs
 // fall back to WiFi positioning, which can drift up to ~100m indoors.
 
-import { hashPin } from '../auth/pin';
 import bcrypt from 'bcrypt';
 import { pool, query } from '../db';
 
@@ -57,17 +57,6 @@ async function main() {
     console.log(`  ✓ location: ${o.slug}`);
   }
 
-  // Annie Simmons — Mesa Dental Assistant, PIN 1111, $27/hr W2.
-  // Pre-approved (manually seeded, skips the self-register approval gate).
-  // Roster PDF shows "Ann" but Anas confirms her name is Annie.
-  await upsertEmployee({
-    name: 'Annie Simmons',
-    pin: '1111',
-    role: 'dental_assistant',
-    pay_rate_cents: 2700,
-    aliases: ['Ann Simmons'],
-  });
-
   // Owners — track_hours = false so they don't show up on the kiosk
   // employee flow. Their PINs route them straight into the manager portal.
   await upsertOwner({
@@ -85,48 +74,6 @@ async function main() {
 
   await pool.end();
   console.log('\nSeed complete.');
-}
-
-async function upsertEmployee({
-  name,
-  pin,
-  role,
-  pay_rate_cents,
-  aliases = [],
-}: {
-  name: string;
-  pin: string;
-  role: string;
-  pay_rate_cents?: number;
-  aliases?: string[];
-}) {
-  const candidates = [name, ...aliases];
-  const placeholders = candidates.map((_, i) => `$${i + 1}`).join(', ');
-  const existing = await query<{ id: number }>(
-    `SELECT id FROM timeclock.users WHERE name IN (${placeholders})`,
-    candidates,
-  );
-  const pinHash = await hashPin(pin);
-  if (existing.rows.length > 0) {
-    await query(
-      `UPDATE timeclock.users
-       SET name = $1, pin_hash = $2, role = $3,
-           pay_rate_cents = COALESCE($4, pay_rate_cents),
-           approved = true, active = true, updated_at = NOW()
-       WHERE id = $5`,
-      [name, pinHash, role, pay_rate_cents ?? null, existing.rows[0].id],
-    );
-    console.log(`  ✓ employee updated: ${name} (PIN ${pin})`);
-    return;
-  }
-  await query(
-    `INSERT INTO timeclock.users
-       (name, pin_hash, role, employment_type, pay_rate_cents,
-        is_owner, is_manager, track_hours, active, approved, self_registered)
-     VALUES ($1, $2, $3, 'W2', $4, false, false, true, true, true, false)`,
-    [name, pinHash, role, pay_rate_cents ?? null],
-  );
-  console.log(`  ✓ employee created: ${name} (PIN ${pin})`);
 }
 
 async function upsertOwner({

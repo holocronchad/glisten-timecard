@@ -16,9 +16,8 @@
 // Generated: 2026-04-28.
 //
 // Excluded:
-//   - Ann Simmons      — already seeded by seed.ts
-//   - Anas Hasic       — owner, seeded
-//   - Dr. Revan Dawood — owner, seeded
+//   - Anas Hasic       — owner, seeded by seed.ts
+//   - Dr. Revan Dawood — owner, seeded by seed.ts
 
 import { pool, query } from '../db';
 
@@ -54,6 +53,7 @@ const ROSTER: RosterEntry[] = [
   { name: 'Aubrey Hanks',      role: 'hygienist',        employment_type: 'W2', pay_rate_cents: 5700, track_hours: true, note: 'Works Mesa + Gilbert' },
   { name: 'Sofia Hernandez',   role: 'dental_assistant', employment_type: 'W2', pay_rate_cents: 2500, track_hours: true },
   { name: 'Aayushi Parikh',    role: 'front_desk',       employment_type: 'W2', pay_rate_cents: 2900, track_hours: true },
+  { name: 'Annie Simmons',     role: 'dental_assistant', employment_type: 'W2', pay_rate_cents: 2700, track_hours: true },
   { name: 'Ayda Reshidi',      role: 'dental_assistant', employment_type: 'W2', pay_rate_cents: 2100, track_hours: true },
 
   // ── Gilbert ───────────────────────────────────────────────────────────
