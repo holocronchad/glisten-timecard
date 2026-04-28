@@ -92,11 +92,21 @@ export default function Staff() {
                   {r.email && <> · {r.email}</>}
                 </div>
               </div>
-              {r.active && r.track_hours && (
-                <span className="text-creamSoft/40 text-xs uppercase tracking-[0.18em]">
-                  on the clock
-                </span>
-              )}
+              <div className="flex flex-col items-end gap-1 text-right">
+                {r.pay_rate_cents !== null ? (
+                  <span className="text-creamSoft text-sm tabular-nums tracking-tight">
+                    ${(r.pay_rate_cents / 100).toFixed(2)}
+                    <span className="text-creamSoft/40 text-xs ml-1">/hr</span>
+                  </span>
+                ) : !r.is_owner && (
+                  <span className="text-creamSoft/40 text-xs italic">salary / commission</span>
+                )}
+                {r.active && r.track_hours && (
+                  <span className="text-creamSoft/40 text-[10px] uppercase tracking-[0.18em]">
+                    on the clock
+                  </span>
+                )}
+              </div>
             </div>
           ))
         )}

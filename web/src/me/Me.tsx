@@ -163,12 +163,12 @@ function Hours({
           <Stat label="Last 14 days" value={hhmm(periodTotalMinutes)} />
         </div>
 
-        <h2 className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
+        <h2 className="text-creamSoft/60 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
           By day
         </h2>
-        <div className="rounded-3xl border border-creamSoft/10 bg-graphite/40 divide-y divide-creamSoft/5">
+        <div className="frosted-pane rounded-3xl divide-y divide-creamSoft/10 overflow-hidden">
           {dailyTotals.length === 0 ? (
-            <div className="p-6 text-creamSoft/40 text-sm">No hours yet.</div>
+            <div className="p-6 text-creamSoft/50 text-sm">No hours yet.</div>
           ) : (
             <AnimatePresence>
               {[...dailyTotals].reverse().map((d, i) => (
@@ -179,10 +179,10 @@ function Hours({
                   transition={{ duration: 0.4, delay: Math.min(i * 0.04, 0.4) }}
                   className="flex items-center justify-between p-4"
                 >
-                  <span className="text-creamSoft/80 text-sm">{prettyDate(d.date)}</span>
-                  <span className="text-creamSoft tabular-nums tracking-tight">
+                  <span className="text-creamSoft text-base">{prettyDate(d.date)}</span>
+                  <span className="text-cream tabular-nums tracking-tight text-base font-medium">
                     {hhmm(d.worked_minutes)}
-                    {d.open && <span className="text-amber-300/80 ml-2 text-xs">(open)</span>}
+                    {d.open && <span className="text-amber-300 ml-2 text-xs">(open)</span>}
                   </span>
                 </motion.div>
               ))}
@@ -190,26 +190,26 @@ function Hours({
           )}
         </div>
 
-        <h2 className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
+        <h2 className="text-creamSoft/60 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
           Recent punches
         </h2>
-        <div className="rounded-3xl border border-creamSoft/10 bg-graphite/40 divide-y divide-creamSoft/5">
+        <div className="frosted-pane rounded-3xl divide-y divide-creamSoft/10 overflow-hidden">
           {data.punches.length === 0 ? (
-            <div className="p-6 text-creamSoft/40 text-sm">No punches yet.</div>
+            <div className="p-6 text-creamSoft/50 text-sm">No punches yet.</div>
           ) : (
             data.punches.slice(0, 30).map((p) => (
               <div key={p.id} className="flex items-center gap-4 p-4">
                 <div className="flex-1">
-                  <div className="text-creamSoft text-sm">{TYPE_LABEL[p.type]}</div>
-                  <div className="text-creamSoft/40 text-xs">
+                  <div className="text-creamSoft text-base">{TYPE_LABEL[p.type]}</div>
+                  <div className="text-creamSoft/55 text-xs mt-0.5">
                     {p.location_name ?? 'No location'}
                   </div>
                 </div>
-                <div className="text-creamSoft/70 text-sm tabular-nums tracking-tight whitespace-nowrap">
+                <div className="text-cream text-sm tabular-nums tracking-tight whitespace-nowrap">
                   {prettyDate(p.ts.slice(0, 10))} · {formatTime(p.ts)}
                 </div>
                 {p.flagged && (
-                  <Flag size={14} className="text-amber-300/80" />
+                  <Flag size={14} className="text-amber-300" />
                 )}
               </div>
             ))
@@ -227,9 +227,9 @@ function Hours({
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-3xl border border-creamSoft/10 bg-graphite/40 p-5">
-      <div className="text-creamSoft/40 text-xs tracking-[0.18em] uppercase">{label}</div>
-      <div className="text-creamSoft text-3xl tracking-tight font-light mt-1 tabular-nums">
+    <div className="frosted-pane rounded-3xl p-5">
+      <div className="text-creamSoft/60 text-xs tracking-[0.18em] uppercase">{label}</div>
+      <div className="text-cream text-3xl tracking-tight font-light mt-1 tabular-nums">
         {value}
       </div>
     </div>

@@ -15,6 +15,7 @@ type EmployeeDetailResponse = {
     email: string | null;
     role: string;
     employment_type: 'W2' | '1099';
+    pay_rate_cents: number | null;
     is_owner: boolean;
     is_manager: boolean;
     track_hours: boolean;
@@ -107,6 +108,11 @@ export default function EmployeeDetail() {
           </h1>
           <p className="text-creamSoft/40 text-sm mt-1">
             {data.user.role} · {data.user.employment_type}
+            {data.user.pay_rate_cents !== null && (
+              <span className="text-creamSoft/70 ml-2">
+                · ${(data.user.pay_rate_cents / 100).toFixed(2)}/hr
+              </span>
+            )}
             {!data.user.active && (
               <span className="ml-2 text-amber-300/80">inactive</span>
             )}
