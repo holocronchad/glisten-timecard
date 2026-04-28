@@ -306,6 +306,7 @@ export default function Kiosk() {
           <RegisterModal
             initialPin={registerOpenForPin}
             coords={coords}
+            onRequestGps={requestGps}
             onClose={() => setRegisterOpenForPin(null)}
             onRegistered={handleRegistered}
           />

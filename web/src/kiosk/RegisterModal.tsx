@@ -5,13 +5,20 @@ import { api, ApiError, RegisterResponse, RegisterSuggestion } from '../shared/a
 type Props = {
   initialPin: string;
   coords: { lat: number; lng: number } | null;
+  onRequestGps: () => void;
   onClose: () => void;
   onRegistered: (pin: string, name: string) => void;
 };
 
 type Step = 'form' | 'submitting' | 'suggest';
 
-export default function RegisterModal({ initialPin, coords, onClose, onRegistered }: Props) {
+export default function RegisterModal({
+  initialPin,
+  coords,
+  onRequestGps,
+  onClose,
+  onRegistered,
+}: Props) {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [pin, setPin] = useState(initialPin);
@@ -25,7 +32,10 @@ export default function RegisterModal({ initialPin, coords, onClose, onRegistere
     force_self_register?: boolean;
   } = {}) {
     if (!coords) {
-      setError('Location is required to register a new employee.');
+      // No GPS yet — re-request permission and bail. The GPS callback will
+      // populate coords; user re-submits.
+      onRequestGps();
+      setError('Allow location access in your browser, then tap Create again.');
       setStep('form');
       return;
     }
@@ -175,6 +185,16 @@ export default function RegisterModal({ initialPin, coords, onClose, onRegistere
                 className="w-full bg-ink/40 border border-creamSoft/15 rounded-2xl px-4 py-3 text-creamSoft text-lg tracking-[0.5em] text-center focus:outline-none focus:border-cream/40 transition-colors"
               />
 
+              {!coords && (
+                <button
+                  type="button"
+                  onClick={onRequestGps}
+                  className="w-full rounded-full bg-amber-300/95 text-ink px-4 py-2.5 text-sm tracking-tight font-bold mt-1"
+                >
+                  Tap to allow location
+                </button>
+              )}
+
               {error && (
                 <p className="text-amber-300/90 text-sm text-center mt-1">{error}</p>
               )}
@@ -190,7 +210,7 @@ export default function RegisterModal({ initialPin, coords, onClose, onRegistere
                 <button
                   type="button"
                   onClick={submit}
-                  disabled={!firstName || !lastName || pin.length !== 4 || pinConfirm.length !== 4}
+                  disabled={!firstName || !lastName || pin.length !== 4 || pinConfirm.length !== 4 || !coords}
                   className="flex-1 rounded-full px-4 py-3 bg-cream text-ink text-sm tracking-tight font-bold disabled:opacity-30 disabled:cursor-not-allowed"
                 >
                   Create my account
@@ -257,11 +277,6 @@ export default function RegisterModal({ initialPin, coords, onClose, onRegistere
           )}
         </AnimatePresence>
 
-        {step !== 'suggest' && (
-          <p className="mt-6 text-creamSoft/35 text-[11px] text-center leading-relaxed">
-            A manager will approve your account before your first paycheck. Your time is recorded starting now.
-          </p>
-        )}
       </motion.div>
     </motion.div>
   );
