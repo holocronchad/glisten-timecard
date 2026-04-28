@@ -57,14 +57,15 @@ async function main() {
     console.log(`  ✓ location: ${o.slug}`);
   }
 
-  // Ann Simmons — Mesa Dental Assistant, PIN 1111, $27/hr W2 (per roster).
+  // Annie Simmons — Mesa Dental Assistant, PIN 1111, $27/hr W2.
   // Pre-approved (manually seeded, skips the self-register approval gate).
+  // Roster PDF shows "Ann" but Anas confirms her name is Annie.
   await upsertEmployee({
-    name: 'Ann Simmons',
+    name: 'Annie Simmons',
     pin: '1111',
     role: 'dental_assistant',
     pay_rate_cents: 2700,
-    aliases: ['Annie Simmons'],
+    aliases: ['Ann Simmons'],
   });
 
   // Owners — track_hours = false so they don't show up on the kiosk
