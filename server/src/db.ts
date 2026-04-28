@@ -3,8 +3,14 @@
 import { Pool, PoolClient } from 'pg';
 import { config } from './config';
 
+// DO managed Postgres uses a self-signed CA chain; with the default Node
+// trust store, pg's `verify-full` (which sslmode=require now aliases to in
+// pg-connection-string v2) rejects it. We explicitly set rejectUnauthorized
+// = false to match what Holocron + Tacitus do on the same droplet. The
+// connection is still TLS-encrypted; we just don't verify the issuer chain.
 export const pool = new Pool({
   connectionString: config.databaseUrl,
+  ssl: config.databaseUrl.includes('sslmode=') ? { rejectUnauthorized: false } : undefined,
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
