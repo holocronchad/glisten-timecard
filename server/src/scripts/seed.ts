@@ -57,12 +57,14 @@ async function main() {
     console.log(`  ✓ location: ${o.slug}`);
   }
 
-  // Annie Simmons — first real employee, PIN 1111. Pre-approved (manually
-  // seeded, doesn't go through the self-register approval gate).
+  // Ann Simmons — Mesa Dental Assistant, PIN 1111, $27/hr W2 (per roster).
+  // Pre-approved (manually seeded, skips the self-register approval gate).
   await upsertEmployee({
-    name: 'Annie Simmons',
+    name: 'Ann Simmons',
     pin: '1111',
-    role: 'front_desk',
+    role: 'dental_assistant',
+    pay_rate_cents: 2700,
+    aliases: ['Annie Simmons'],
   });
 
   // Owners — track_hours = false so they don't show up on the kiosk
@@ -75,7 +77,7 @@ async function main() {
   });
   await upsertOwner({
     name: 'Dr. Revan Dawood',
-    pin: process.env.SEED_DAWOOD_PIN || '0590',
+    pin: process.env.SEED_DAWOOD_PIN || '1993',
     email: process.env.SEED_DAWOOD_EMAIL || 'dawood@glistendental.com',
     role: 'doctor',
   });
@@ -88,32 +90,40 @@ async function upsertEmployee({
   name,
   pin,
   role,
+  pay_rate_cents,
+  aliases = [],
 }: {
   name: string;
   pin: string;
   role: string;
+  pay_rate_cents?: number;
+  aliases?: string[];
 }) {
+  const candidates = [name, ...aliases];
+  const placeholders = candidates.map((_, i) => `$${i + 1}`).join(', ');
   const existing = await query<{ id: number }>(
-    `SELECT id FROM timeclock.users WHERE name = $1 AND active = true`,
-    [name],
+    `SELECT id FROM timeclock.users WHERE name IN (${placeholders})`,
+    candidates,
   );
   const pinHash = await hashPin(pin);
   if (existing.rows.length > 0) {
     await query(
       `UPDATE timeclock.users
-       SET pin_hash = $1, role = $2, approved = true, updated_at = NOW()
-       WHERE id = $3`,
-      [pinHash, role, existing.rows[0].id],
+       SET name = $1, pin_hash = $2, role = $3,
+           pay_rate_cents = COALESCE($4, pay_rate_cents),
+           approved = true, active = true, updated_at = NOW()
+       WHERE id = $5`,
+      [name, pinHash, role, pay_rate_cents ?? null, existing.rows[0].id],
     );
     console.log(`  ✓ employee updated: ${name} (PIN ${pin})`);
     return;
   }
   await query(
     `INSERT INTO timeclock.users
-       (name, pin_hash, role, employment_type,
+       (name, pin_hash, role, employment_type, pay_rate_cents,
         is_owner, is_manager, track_hours, active, approved, self_registered)
-     VALUES ($1, $2, $3, 'W2', false, false, true, true, true, false)`,
-    [name, pinHash, role],
+     VALUES ($1, $2, $3, 'W2', $4, false, false, true, true, true, false)`,
+    [name, pinHash, role, pay_rate_cents ?? null],
   );
   console.log(`  ✓ employee created: ${name} (PIN ${pin})`);
 }
