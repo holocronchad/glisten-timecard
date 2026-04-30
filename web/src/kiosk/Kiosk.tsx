@@ -186,11 +186,18 @@ export default function Kiosk() {
 
     const { pin, lookup } = phase;
 
-    // GPS not yet ready — try ONE more time before failing the click.
-    // Previously we bounced straight to the PIN screen with a vague error;
-    // that swallowed legitimate clicks if GPS was mid-acquisition.
+    // WFH-only PIN users (Chad-the-tester, Filza when at home) get
+    // bypass_geofence=true on lookup. Their server side ignores lat/lng
+    // entirely, so we must NOT block on the browser GPS state — many
+    // remote users won't have granted location at all.
+    const skipGps = lookup.bypass_geofence === true;
+
+    // GPS not yet ready (and we need it) — try ONE more time before
+    // failing the click. Previously we bounced straight to the PIN screen
+    // with a vague error; that swallowed legitimate clicks if GPS was
+    // mid-acquisition.
     let punchCoords = coords;
-    if (!punchCoords) {
+    if (!skipGps && !punchCoords) {
       setPhase({ kind: 'punching', pin, type });
       const r = await getCurrentPosition();
       if (r.ok) {
@@ -210,9 +217,14 @@ export default function Kiosk() {
 
     setPhase({ kind: 'punching', pin, type });
     try {
+      const body: Record<string, unknown> = { pin, type };
+      if (punchCoords) {
+        body.lat = punchCoords.lat;
+        body.lng = punchCoords.lng;
+      }
       const result = await api<PunchResponse>('/kiosk/punch', {
         method: 'POST',
-        body: { pin, type, lat: punchCoords.lat, lng: punchCoords.lng },
+        body,
       });
       // eslint-disable-next-line no-console
       console.info('[kiosk] punch ok', { id: result.punch.id, type: result.punch.type });

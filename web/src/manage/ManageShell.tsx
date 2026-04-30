@@ -87,7 +87,7 @@ export default function ManageShell({ children }: { children?: ReactNode }) {
           </nav>
         </div>
         <div className="flex items-center gap-4 text-sm">
-          {user?.is_owner && (
+          {(user?.is_owner || user?.is_manager) && (
             <button
               onClick={() => setAddHoursOpen(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-cream text-ink hover:bg-cream/90 transition-colors text-sm tracking-tight font-medium"

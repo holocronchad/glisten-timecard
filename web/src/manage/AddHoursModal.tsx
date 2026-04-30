@@ -25,6 +25,7 @@ type StaffRow = {
   active: boolean;
   is_owner: boolean;
   track_hours: boolean;
+  role?: string;
 };
 type Loc = { id: number; name: string; active: boolean };
 
@@ -61,12 +62,19 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await api<{ staff: StaffRow[] }>('/manage/staff', {
+        // /manage/employees is the manager-safe minimal picker (no pay rate,
+        // no email). Falls back to /manage/staff if the older endpoint is
+        // missing on the server side. Filters out the test user (Chad).
+        const r = await api<{ employees: StaffRow[] }>('/manage/employees', {
           token: token ?? undefined,
-        });
+        }).catch(() =>
+          api<{ employees: StaffRow[] }>('/manage/staff', {
+            token: token ?? undefined,
+          }).then((rr: any) => ({ employees: rr.staff as StaffRow[] })),
+        );
         if (!cancelled) {
-          const eligible = r.staff
-            .filter((s) => s.active && s.track_hours && !s.is_owner)
+          const eligible = r.employees
+            .filter((s) => s.active && s.track_hours && !s.is_owner && s.role !== 'tester')
             .sort((a, b) => a.name.localeCompare(b.name));
           setStaff(eligible);
         }

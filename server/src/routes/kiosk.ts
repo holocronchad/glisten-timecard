@@ -450,11 +450,14 @@ router.post('/cpr', async (req, res) => {
 });
 
 // ── POST /kiosk/punch ──────────────────────────────────────────────────────
+// lat/lng are OPTIONAL because WFH-PIN users (whose punches bypass the
+// geofence entirely) don't need to send coords. For a regular geofence-
+// required punch the resolver below will reject when coords are missing.
 const punchSchema = z.object({
   pin: z.string().regex(/^\d{4}$/),
   type: z.enum(['clock_in', 'clock_out', 'lunch_start', 'lunch_end']),
-  lat: z.number().min(-90).max(90),
-  lng: z.number().min(-180).max(180),
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
 });
 
 router.post('/punch', async (req, res) => {
@@ -526,6 +529,17 @@ router.post('/punch', async (req, res) => {
   if (usedRemotePin) {
     officeId = null;
   } else {
+    // Geofence-required PIN: lat/lng are mandatory. WFH PINs above made
+    // them optional in the schema; if a non-WFH user reaches here without
+    // coords we hard-fail (vs. silently flag/inherit, which would let
+    // anyone bypass geofence by stripping coords client-side).
+    if (typeof lat !== 'number' || typeof lng !== 'number') {
+      res.status(400).json({
+        error: 'Location required',
+        message: 'Allow location in your browser, then try again.',
+      });
+      return;
+    }
     const { rows: locations } = await query(
       `SELECT id, lat, lng, geofence_m, active FROM timeclock.locations WHERE active = true`
     );

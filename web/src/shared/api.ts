@@ -64,6 +64,7 @@ export type EmployeeLookup = {
   allowed_actions: PunchType[];
   location: { id: number; distance_m: number } | null;
   geofence_required: boolean;
+  bypass_geofence: boolean;
   cpr: CprState;
 };
 

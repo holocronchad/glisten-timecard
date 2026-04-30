@@ -707,6 +707,20 @@ router.get('/staff', requireOwner, async (_req, res) => {
   res.json({ staff: rows });
 });
 
+// ── GET /manage/employees ──────────────────────────────────────────────────
+// Minimal employee picker (manager or owner). No pay rate, no email — just
+// enough to populate dropdowns like AddHoursModal. /staff is owner-only
+// because it leaks pay rates; this endpoint is the manager-safe version.
+router.get('/employees', async (_req, res) => {
+  const { rows } = await query(
+    `SELECT id, name, role, is_owner, is_manager, track_hours, active
+     FROM timeclock.users
+     WHERE active = true AND track_hours = true AND is_owner = false
+     ORDER BY name ASC`,
+  );
+  res.json({ employees: rows });
+});
+
 const createStaffSchema = z.object({
   name: z.string().min(2).max(120),
   email: z.string().email().optional(),
