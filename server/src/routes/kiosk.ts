@@ -512,7 +512,7 @@ router.post('/punch', async (req, res) => {
       source: 'auto_close',
       ts: closeTs,
       flagged: true,
-      flagReason: `auto_close_stale_shift_at_clock_in (was ${latest.type} from ${new Date(latest.ts).toISOString()})`,
+      flagReason: `auto_close stale ${latest.type} from ${new Date(latest.ts).toISOString()}`,
       autoClosedAt: new Date(),
     });
     latest = await getLatestPunch(user.id);
@@ -615,7 +615,7 @@ router.post('/punch', async (req, res) => {
   let monitorFlagReason: string | null = null;
   if (PRIMARY_PIN_MONITORED_USERS.has(user.id) && !usedRemotePin) {
     monitorFlagged = true;
-    monitorFlagReason = `primary_pin_review: ${user.name} uses a different rate WFH; this punch is in-office, please verify.`;
+    monitorFlagReason = `primary_pin_review: ${user.name.split(' ')[0]} (in-office punch — verify vs WFH).`;
   }
 
   const finalFlagged = geofenceFlagged || monitorFlagged;
