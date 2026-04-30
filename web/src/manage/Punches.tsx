@@ -55,6 +55,17 @@ export default function Punches() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flaggedOnly, from, to, token]);
 
+  // Refresh on Add Hours / Edit Punch saves so the manager sees their
+  // change land without a manual page reload.
+  useEffect(() => {
+    function onPunchesUpdated() {
+      load();
+    }
+    window.addEventListener('glisten:punches-updated', onPunchesUpdated);
+    return () => window.removeEventListener('glisten:punches-updated', onPunchesUpdated);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flaggedOnly, from, to, token]);
+
   return (
     <div>
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">

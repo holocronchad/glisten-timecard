@@ -52,11 +52,16 @@ export default function Today() {
     function onVis() {
       if (document.visibilityState === 'visible') load();
     }
+    function onPunchesUpdated() {
+      load();
+    }
     document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('glisten:punches-updated', onPunchesUpdated);
     return () => {
       cancelled = true;
       clearInterval(t);
       document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('glisten:punches-updated', onPunchesUpdated);
     };
   }, [token]);
 

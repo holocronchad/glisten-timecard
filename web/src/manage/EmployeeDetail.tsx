@@ -72,6 +72,22 @@ export default function EmployeeDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, idxParam, token]);
 
+  // Refresh on global "punches updated" broadcast (AddHoursModal +
+  // EditPunchModal both fire it). Lets Dr. Dawood see her changes
+  // immediately without a manual page reload.
+  useEffect(() => {
+    function onPunchesUpdated(e: Event) {
+      const detail = (e as CustomEvent<{ userId?: number }>).detail;
+      // Only reload if no userId in detail (broad change) or it matches us.
+      if (!detail || detail.userId == null || String(detail.userId) === id) {
+        load();
+      }
+    }
+    window.addEventListener('glisten:punches-updated', onPunchesUpdated);
+    return () => window.removeEventListener('glisten:punches-updated', onPunchesUpdated);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, idxParam, token]);
+
   function shiftPeriod(delta: number) {
     if (!data) return;
     setParams({ index: String(data.period.index + delta) });

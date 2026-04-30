@@ -86,6 +86,11 @@ export default function EditPunchModal({ punch, onClose, onSaved }: Props) {
         body,
       });
       toast('Punch updated.');
+      try {
+        window.dispatchEvent(new CustomEvent('glisten:punches-updated', { detail: {} }));
+      } catch {
+        /* no-op */
+      }
       onSaved();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : 'Save failed';
@@ -117,6 +122,11 @@ export default function EditPunchModal({ punch, onClose, onSaved }: Props) {
         body: { reason },
       });
       toast('Punch deleted.');
+      try {
+        window.dispatchEvent(new CustomEvent('glisten:punches-updated', { detail: {} }));
+      } catch {
+        /* no-op */
+      }
       onSaved();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : 'Delete failed';

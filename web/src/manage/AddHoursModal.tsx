@@ -5,19 +5,24 @@ import { api, ApiError } from '../shared/api';
 import { useAuth } from './auth';
 import { useToast } from '../shared/toast';
 
-// Add Hours modal — owner flow for backfilling missed punches.
+// Add Hours modal — owner/manager flow for backfilling missed punches.
 //
-// Three modes (per Anas 2026-04-29 second pass):
-//   1. Clock-in only        — employee forgot to punch in
-//   2. Clock-out only       — employee forgot to punch out
-//   3. Full shift (in + out) — employee never punched at all
+// Four checkboxes (per Anas 2026-04-29 third pass — Dr. Dawood needed
+// to backfill lunch breaks too):
+//   - Clock-in
+//   - Lunch start
+//   - Lunch end
+//   - Clock-out
 //
-// Server endpoint POST /api/manage/punches takes a single punch; for the
-// "full shift" mode we just post twice in sequence. Each insert audit-logs
-// independently, which is fine — manager_edit source + the Reason text
-// makes provenance clear.
+// Manager can check any subset. Common combinations:
+//   - Clock-out alone               -> employee forgot to punch out
+//   - Lunch start + Lunch end       -> backfill a missed lunch break
+//   - Full shift in/lunch start/lunch end/out -> never punched at all
 //
-// Lunch types intentionally absent — only clock_in / clock_out backfill.
+// Validation: among checked items, timestamps must be in chronological
+// order: clock_in < lunch_start < lunch_end < clock_out. Server side
+// records each as a separate manager_edit punch; the state machine on
+// the kiosk path doesn't apply here because manager edits bypass it.
 
 type StaffRow = {
   id: number;
@@ -50,9 +55,16 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
   const [userId, setUserId] = useState<number | null>(null);
 
   const [includeIn, setIncludeIn] = useState(true);
+  const [includeLunchStart, setIncludeLunchStart] = useState(false);
+  const [includeLunchEnd, setIncludeLunchEnd] = useState(false);
   const [includeOut, setIncludeOut] = useState(true);
-  const [whenIn, setWhenIn] = useState(nowLocalAz());
-  const [whenOut, setWhenOut] = useState(nowLocalAz());
+
+  const initialNow = nowLocalAz();
+  const [whenIn, setWhenIn] = useState(initialNow);
+  const [whenLunchStart, setWhenLunchStart] = useState(initialNow);
+  const [whenLunchEnd, setWhenLunchEnd] = useState(initialNow);
+  const [whenOut, setWhenOut] = useState(initialNow);
+
   const [locationId, setLocationId] = useState<number | null>(null);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -99,20 +111,39 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
     };
   }, [token]);
 
+  // Each row: (active?, type, datetime-string).
+  function plannedPunches() {
+    const list: Array<{ type: 'clock_in' | 'lunch_start' | 'lunch_end' | 'clock_out'; when: string }> = [];
+    if (includeIn) list.push({ type: 'clock_in', when: whenIn });
+    if (includeLunchStart) list.push({ type: 'lunch_start', when: whenLunchStart });
+    if (includeLunchEnd) list.push({ type: 'lunch_end', when: whenLunchEnd });
+    if (includeOut) list.push({ type: 'clock_out', when: whenOut });
+    return list;
+  }
+
   async function save() {
     if (userId == null) {
       setErr('Pick an employee.');
       return;
     }
-    if (!includeIn && !includeOut) {
-      setErr('Pick at least a clock-in or a clock-out.');
+    const planned = plannedPunches();
+    if (planned.length === 0) {
+      setErr('Pick at least one punch to add.');
       return;
     }
-    if (includeIn && includeOut) {
-      const inMs = new Date(`${whenIn}:00-07:00`).getTime();
-      const outMs = new Date(`${whenOut}:00-07:00`).getTime();
-      if (!(outMs > inMs)) {
-        setErr('Clock-out time must be after clock-in time.');
+    // Chronological-order check among checked rows. The expected sequence is
+    // clock_in < lunch_start < lunch_end < clock_out, which already matches
+    // plannedPunches() order, so a strict-monotonic ms array works.
+    const tsMs = planned.map((p) => new Date(`${p.when}:00-07:00`).getTime());
+    for (let i = 1; i < tsMs.length; i++) {
+      if (!(tsMs[i] > tsMs[i - 1])) {
+        const ORDER_LABEL: Record<typeof planned[number]['type'], string> = {
+          clock_in: 'Clock-in',
+          lunch_start: 'Lunch start',
+          lunch_end: 'Lunch end',
+          clock_out: 'Clock-out',
+        };
+        setErr(`${ORDER_LABEL[planned[i].type]} must be after ${ORDER_LABEL[planned[i - 1].type]}.`);
         return;
       }
     }
@@ -124,42 +155,51 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
     setBusy(true);
     setErr(null);
     try {
-      // Insert in chronological order so the state machine stays valid for
-      // anyone who looks at history afterwards. POST /manage/punches is
-      // idempotent enough for our purposes — each call audit-logs separately.
-      if (includeIn) {
+      // Insert in chronological order. POST /manage/punches audit-logs
+      // each insert separately; manager edits bypass the kiosk state
+      // machine so order doesn't strictly matter, but we do it for any
+      // future reader of history.
+      for (const p of planned) {
         await api('/manage/punches', {
           method: 'POST',
           token: token ?? undefined,
           body: {
             user_id: userId,
-            type: 'clock_in',
-            ts: localAzToIso(whenIn),
+            type: p.type,
+            ts: localAzToIso(p.when),
             location_id: locationId,
             reason: reason.trim(),
           },
         });
       }
-      if (includeOut) {
-        await api('/manage/punches', {
-          method: 'POST',
-          token: token ?? undefined,
-          body: {
-            user_id: userId,
-            type: 'clock_out',
-            ts: localAzToIso(whenOut),
-            location_id: locationId,
-            reason: reason.trim(),
-          },
-        });
-      }
+      // Single-action toast wording when only one type is being added;
+      // generic when multiple.
       const summary =
-        includeIn && includeOut
-          ? 'Full shift added.'
-          : includeIn
-          ? 'Clock-in added.'
-          : 'Clock-out added.';
+        planned.length === 1
+          ? planned[0].type === 'clock_in'
+            ? 'Clock-in added.'
+            : planned[0].type === 'clock_out'
+            ? 'Clock-out added.'
+            : planned[0].type === 'lunch_start'
+            ? 'Lunch start added.'
+            : 'Lunch end added.'
+          : planned.length === 2 &&
+            planned[0].type === 'lunch_start' &&
+            planned[1].type === 'lunch_end'
+          ? 'Lunch break added.'
+          : `${planned.length} punches added.`;
       toast(summary);
+      // Broadcast so any list view (Today, Punches, EmployeeDetail) reloads
+      // without forcing the manager to refresh the page.
+      try {
+        window.dispatchEvent(
+          new CustomEvent('glisten:punches-updated', {
+            detail: { userId },
+          }),
+        );
+      } catch {
+        /* dispatchEvent should always work in browsers; no-op on SSR */
+      }
       onSaved();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : 'Save failed';
@@ -170,14 +210,29 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
     }
   }
 
-  const ctaLabel =
-    includeIn && includeOut
-      ? 'Add full shift'
-      : includeIn
-      ? 'Add clock-in'
-      : includeOut
-      ? 'Add clock-out'
-      : 'Add hours';
+  const checkedCount =
+    Number(includeIn) + Number(includeLunchStart) + Number(includeLunchEnd) + Number(includeOut);
+  const ctaLabel = (() => {
+    if (checkedCount === 0) return 'Add hours';
+    if (checkedCount === 1) {
+      if (includeIn) return 'Add clock-in';
+      if (includeLunchStart) return 'Add lunch start';
+      if (includeLunchEnd) return 'Add lunch end';
+      if (includeOut) return 'Add clock-out';
+    }
+    if (
+      checkedCount === 2 &&
+      includeLunchStart &&
+      includeLunchEnd &&
+      !includeIn &&
+      !includeOut
+    ) {
+      return 'Add lunch break';
+    }
+    if (checkedCount === 2 && includeIn && includeOut) return 'Add full shift';
+    if (checkedCount === 4) return 'Add full shift with lunch';
+    return `Add ${checkedCount} punches`;
+  })();
 
   return (
     <motion.div
@@ -264,6 +319,66 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
             )}
           </div>
 
+          {/* Lunch start row */}
+          <div
+            className={[
+              'rounded-2xl border p-4 transition-colors',
+              includeLunchStart
+                ? 'bg-lunchAccent/10 border-lunchAccent/40'
+                : 'bg-ink/30 border-creamSoft/5',
+            ].join(' ')}
+          >
+            <label className="flex items-center gap-2 text-sm tracking-tight cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeLunchStart}
+                onChange={(e) => setIncludeLunchStart(e.target.checked)}
+                className="accent-lunchAccent w-4 h-4"
+              />
+              <span className="text-xs tracking-[0.18em] uppercase font-medium text-lunchAccent">
+                Lunch start
+              </span>
+            </label>
+            {includeLunchStart && (
+              <input
+                type="datetime-local"
+                value={whenLunchStart}
+                onChange={(e) => setWhenLunchStart(e.target.value)}
+                className="mt-2 w-full bg-ink border border-creamSoft/10 rounded-xl px-3 py-2.5 text-creamSoft focus:outline-none focus:border-cream/40 transition-colors"
+              />
+            )}
+          </div>
+
+          {/* Lunch end row */}
+          <div
+            className={[
+              'rounded-2xl border p-4 transition-colors',
+              includeLunchEnd
+                ? 'bg-lunchAccent/10 border-lunchAccent/40'
+                : 'bg-ink/30 border-creamSoft/5',
+            ].join(' ')}
+          >
+            <label className="flex items-center gap-2 text-sm tracking-tight cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeLunchEnd}
+                onChange={(e) => setIncludeLunchEnd(e.target.checked)}
+                className="accent-lunchAccent w-4 h-4"
+              />
+              <span className="text-xs tracking-[0.18em] uppercase font-medium text-lunchAccent">
+                Lunch end
+              </span>
+            </label>
+            {includeLunchEnd && (
+              <input
+                type="datetime-local"
+                value={whenLunchEnd}
+                onChange={(e) => setWhenLunchEnd(e.target.value)}
+                className="mt-2 w-full bg-ink border border-creamSoft/10 rounded-xl px-3 py-2.5 text-creamSoft focus:outline-none focus:border-cream/40 transition-colors"
+              />
+            )}
+          </div>
+
           {/* Clock-out row */}
           <div
             className={[
@@ -345,7 +460,7 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
               disabled={
                 busy ||
                 userId == null ||
-                (!includeIn && !includeOut) ||
+                checkedCount === 0 ||
                 reason.trim().length < 3
               }
               className="flex-[2] rounded-2xl py-3 bg-cream text-ink hover:bg-cream/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm tracking-tight font-medium inline-flex items-center justify-center gap-2"
