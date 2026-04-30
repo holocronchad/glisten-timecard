@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { api, ApiError, PunchType } from '../shared/api';
+import { punchTextClass } from '../shared/punchType';
 
 type Props = {
   pin: string;
@@ -87,21 +88,24 @@ export default function MissedPunchModal({ pin, onClose, onSubmitted }: Props) {
               What did you forget?
             </span>
             <div className="grid grid-cols-2 gap-2 mt-2">
-              {TYPES.map((t) => (
-                <button
-                  key={t.value}
-                  type="button"
-                  onClick={() => setType(t.value)}
-                  className={[
-                    'rounded-2xl py-3 text-sm tracking-tight border transition-colors',
-                    type === t.value
-                      ? 'bg-cream text-ink border-cream'
-                      : 'bg-ink text-creamSoft/70 border-creamSoft/10 hover:border-creamSoft/30',
-                  ].join(' ')}
-                >
-                  {t.label}
-                </button>
-              ))}
+              {TYPES.map((t) => {
+                const selected = type === t.value;
+                return (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => setType(t.value)}
+                    className={[
+                      'rounded-2xl py-3 text-sm tracking-tight font-medium border transition-colors',
+                      selected
+                        ? 'bg-cream text-ink border-cream'
+                        : `bg-ink ${punchTextClass(t.value)} border-creamSoft/10 hover:border-creamSoft/30`,
+                    ].join(' ')}
+                  >
+                    {t.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

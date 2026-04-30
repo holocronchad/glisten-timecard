@@ -252,22 +252,24 @@ export default function Kiosk() {
         <Header now={now} />
       </div>
 
-      {/* Top-right corner shortcut links — fixed position so they are
-          always reachable, even when main content (PIN pad / GPS warnings)
-          is tall enough to push the footer below the viewport. */}
+      {/* Bottom-right corner shortcut links — fixed position pinned to
+          the viewport so they're always reachable even when main content
+          pushes the document footer past the bottom edge. Originally
+          tried top-right (2026-04-29 PM) but it overlapped the date/time
+          header — moved back down. */}
       <div
         className="fixed z-20 flex gap-1.5 right-3 sm:right-5"
-        style={{ top: 'max(env(safe-area-inset-top), 0.75rem)' }}
+        style={{ bottom: 'max(env(safe-area-inset-bottom), 0.75rem)' }}
       >
         <a
           href="/me"
-          className="text-white/85 hover:text-white text-[11px] sm:text-xs font-bold tracking-[0.2em] uppercase px-3 py-2 rounded-full bg-black/25 hover:bg-black/40 backdrop-blur-sm transition-colors"
+          className="text-white/85 hover:text-white text-[11px] sm:text-xs font-bold tracking-[0.2em] uppercase px-3 py-2 rounded-full bg-black/35 hover:bg-black/50 backdrop-blur-sm transition-colors"
         >
           My hours
         </a>
         <a
           href="/manage"
-          className="text-white/85 hover:text-white text-[11px] sm:text-xs font-bold tracking-[0.2em] uppercase px-3 py-2 rounded-full bg-black/25 hover:bg-black/40 backdrop-blur-sm transition-colors"
+          className="text-white/85 hover:text-white text-[11px] sm:text-xs font-bold tracking-[0.2em] uppercase px-3 py-2 rounded-full bg-black/35 hover:bg-black/50 backdrop-blur-sm transition-colors"
         >
           Manager
         </a>

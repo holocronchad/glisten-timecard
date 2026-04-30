@@ -6,6 +6,7 @@ import CloudBackground from '../kiosk/CloudBackground';
 import { api, ApiError, PunchType } from '../shared/api';
 import { formatTime, greetingForHour } from '../shared/geo';
 import { buildSegments, totalsByDay, totalMinutes } from '../shared/hours';
+import { punchTextClass } from '../shared/punchType';
 
 type MeResponse = {
   user: { id: number; name: string };
@@ -200,7 +201,7 @@ function Hours({
             data.punches.slice(0, 30).map((p) => (
               <div key={p.id} className="flex items-center gap-4 p-4">
                 <div className="flex-1">
-                  <div className="text-creamSoft text-base">{TYPE_LABEL[p.type]}</div>
+                  <div className={`text-base font-medium ${punchTextClass(p.type)}`}>{TYPE_LABEL[p.type]}</div>
                   <div className="text-creamSoft/55 text-xs mt-0.5">
                     {p.location_name ?? 'No location'}
                   </div>

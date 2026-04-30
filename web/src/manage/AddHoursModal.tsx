@@ -231,18 +231,18 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
             className={[
               'rounded-2xl border p-4 transition-colors',
               includeIn
-                ? 'bg-ink/60 border-creamSoft/20'
+                ? 'bg-clockInDeep/15 border-clockIn/40'
                 : 'bg-ink/30 border-creamSoft/5',
             ].join(' ')}
           >
-            <label className="flex items-center gap-2 text-creamSoft/85 text-sm tracking-tight cursor-pointer">
+            <label className="flex items-center gap-2 text-sm tracking-tight cursor-pointer">
               <input
                 type="checkbox"
                 checked={includeIn}
                 onChange={(e) => setIncludeIn(e.target.checked)}
-                className="accent-cream w-4 h-4"
+                className="accent-clockIn w-4 h-4"
               />
-              <span className="text-xs tracking-[0.18em] uppercase text-creamSoft/60">
+              <span className="text-xs tracking-[0.18em] uppercase font-medium text-clockIn">
                 Clock-in
               </span>
             </label>
@@ -261,18 +261,18 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
             className={[
               'rounded-2xl border p-4 transition-colors',
               includeOut
-                ? 'bg-ink/60 border-creamSoft/20'
+                ? 'bg-clockOutDeep/15 border-clockOut/40'
                 : 'bg-ink/30 border-creamSoft/5',
             ].join(' ')}
           >
-            <label className="flex items-center gap-2 text-creamSoft/85 text-sm tracking-tight cursor-pointer">
+            <label className="flex items-center gap-2 text-sm tracking-tight cursor-pointer">
               <input
                 type="checkbox"
                 checked={includeOut}
                 onChange={(e) => setIncludeOut(e.target.checked)}
-                className="accent-cream w-4 h-4"
+                className="accent-clockOut w-4 h-4"
               />
-              <span className="text-xs tracking-[0.18em] uppercase text-creamSoft/60">
+              <span className="text-xs tracking-[0.18em] uppercase font-medium text-clockOut">
                 Clock-out
               </span>
             </label>

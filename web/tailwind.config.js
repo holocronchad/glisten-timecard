@@ -11,6 +11,14 @@ export default {
         graphite: '#1A1A1A',
         slate: '#212121',
         mute: '#6B6B66',
+        // Per Dr. Dawood 2026-04-29: clock-in green, clock-out maroon so
+        // the punch types are visually distinct everywhere they render.
+        // These read well on the dark UI and the cream PDF/print exports.
+        clockIn: '#7CB382',
+        clockInDeep: '#3F8055',
+        clockOut: '#B5462E',
+        clockOutDeep: '#7C2D2D',
+        lunchAccent: '#C9A961',
       },
       fontFamily: {
         sans: ['Almarai', 'system-ui', 'sans-serif'],

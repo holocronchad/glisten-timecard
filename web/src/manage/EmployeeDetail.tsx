@@ -8,6 +8,7 @@ import { formatTime } from '../shared/geo';
 import { buildSegments, totalsByDay, totalMinutes, type PunchType } from '../shared/hours';
 import EditPunchModal from './EditPunchModal';
 import BlurredRate from './BlurredRate';
+import { PUNCH_LABEL, punchTextClass } from '../shared/punchType';
 
 type EmployeeDetailResponse = {
   user: {
@@ -45,12 +46,6 @@ type EmployeeDetailResponse = {
   }>;
 };
 
-const TYPE_LABEL: Record<PunchType, string> = {
-  clock_in: 'Clock in',
-  clock_out: 'Clock out',
-  lunch_start: 'Lunch start',
-  lunch_end: 'Lunch end',
-};
 
 export default function EmployeeDetail() {
   const { id } = useParams();
@@ -201,8 +196,8 @@ export default function EmployeeDetail() {
                   <td className="px-5 py-3 text-creamSoft tabular-nums whitespace-nowrap">
                     {dateLabel(p.ts)} · {formatTime(p.ts)}
                   </td>
-                  <td className="px-5 py-3 text-creamSoft/80">
-                    {TYPE_LABEL[p.type]}
+                  <td className={`px-5 py-3 font-medium ${punchTextClass(p.type)}`}>
+                    {PUNCH_LABEL[p.type]}
                   </td>
                   <td className="px-5 py-3 text-creamSoft/60 hidden sm:table-cell">
                     {p.location_name ?? '—'}
@@ -248,8 +243,11 @@ export default function EmployeeDetail() {
                 >
                   {m.status}
                 </span>
-                <span className="text-creamSoft/80 text-sm">
-                  {TYPE_LABEL[m.type]} · {dateLabel(m.proposed_ts)} {formatTime(m.proposed_ts)}
+                <span className="text-sm">
+                  <span className={`font-medium ${punchTextClass(m.type)}`}>
+                    {PUNCH_LABEL[m.type]}
+                  </span>
+                  <span className="text-creamSoft/80"> · {dateLabel(m.proposed_ts)} {formatTime(m.proposed_ts)}</span>
                 </span>
                 <span className="flex-1 text-creamSoft/50 text-sm italic truncate">
                   "{m.reason}"

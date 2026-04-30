@@ -88,6 +88,14 @@ export default function NameReveal({
         {allowed.map((t, i) => {
           const m = META[t];
           const Icon = m.icon;
+          // Per Dr. Dawood 2026-04-29: clock-in green, clock-out maroon,
+          // lunch types gold so types are unmistakable on the kiosk.
+          const tint =
+            t === 'clock_in'
+              ? { bg: 'bg-clockInDeep/35', border: 'border-clockIn/35', icon: 'bg-clockIn text-ink', label: 'text-clockIn' }
+              : t === 'clock_out'
+              ? { bg: 'bg-clockOutDeep/35', border: 'border-clockOut/35', icon: 'bg-clockOut text-cream', label: 'text-clockOut' }
+              : { bg: 'bg-graphite', border: 'border-creamSoft/15', icon: 'bg-cream text-ink', label: 'text-creamSoft' };
           return (
             <motion.button
               key={t}
@@ -96,23 +104,21 @@ export default function NameReveal({
               initial={{ y: 16, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ duration: 0.5, delay: 0.2 + i * 0.07 }}
-              whileHover={{ scale: 1.02, backgroundColor: 'rgba(255, 255, 255, 0.10)' }}
+              whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
-              style={{
-                backgroundColor: 'rgba(255, 255, 255, 0.06)',
-              }}
               className={[
                 'group flex items-center gap-4 p-5 rounded-3xl text-left',
-                'border border-creamSoft/15',
-                'transition-colors',
+                'border transition-colors',
+                tint.bg,
+                tint.border,
               ].join(' ')}
             >
-              <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cream text-ink">
+              <span className={['flex h-12 w-12 items-center justify-center rounded-2xl', tint.icon].join(' ')}>
                 <Icon size={20} />
               </span>
               <span className="flex flex-col">
-                <span className="text-creamSoft text-lg tracking-tight">{m.label}</span>
-                <span className="text-creamSoft/50 text-sm">{m.sub}</span>
+                <span className={['text-lg tracking-tight font-medium', tint.label].join(' ')}>{m.label}</span>
+                <span className="text-creamSoft/55 text-sm">{m.sub}</span>
               </span>
             </motion.button>
           );

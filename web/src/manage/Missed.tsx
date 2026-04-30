@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Check, X } from 'lucide-react';
-import { api, ApiError } from '../shared/api';
+import { api, ApiError, PunchType } from '../shared/api';
 import { useAuth } from './auth';
 import { ListSkeleton } from './Skeleton';
 import { useToast } from '../shared/toast';
+import { PUNCH_LABEL, punchTextClass } from '../shared/punchType';
 
 type MissedRequest = {
   id: number;
@@ -16,13 +17,6 @@ type MissedRequest = {
   reason: string;
   status: 'pending' | 'approved' | 'denied';
   created_at: string;
-};
-
-const TYPE_LABEL: Record<string, string> = {
-  clock_in: 'Clock in',
-  clock_out: 'Clock out',
-  lunch_start: 'Lunch start',
-  lunch_end: 'Lunch end',
 };
 
 export default function Missed() {
@@ -106,9 +100,12 @@ export default function Missed() {
                     <div className="text-creamSoft text-base tracking-tight">
                       {r.user_name}
                     </div>
-                    <div className="text-creamSoft/60 text-sm mt-0.5">
-                      {TYPE_LABEL[r.type]} ·{' '}
-                      <span className="tabular-nums">
+                    <div className="text-sm mt-0.5">
+                      <span className={`font-medium ${punchTextClass(r.type as PunchType)}`}>
+                        {PUNCH_LABEL[r.type as PunchType]}
+                      </span>
+                      <span className="text-creamSoft/60"> · </span>
+                      <span className="text-creamSoft/60 tabular-nums">
                         {formatDateTime(r.proposed_ts)}
                       </span>
                     </div>

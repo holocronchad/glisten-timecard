@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { Flag, Pencil } from 'lucide-react';
-import { api } from '../shared/api';
+import { api, PunchType } from '../shared/api';
 import { useAuth } from './auth';
 import { formatTime } from '../shared/geo';
 import EditPunchModal from './EditPunchModal';
 import { ListSkeleton } from './Skeleton';
+import { PUNCH_LABEL, punchTextClass } from '../shared/punchType';
 
 type PunchRow = {
   id: number;
@@ -20,13 +21,6 @@ type PunchRow = {
   flag_reason: string | null;
   geofence_pass: boolean | null;
   auto_closed_at: string | null;
-};
-
-const TYPE_LABEL: Record<string, string> = {
-  clock_in: 'Clock in',
-  clock_out: 'Clock out',
-  lunch_start: 'Lunch start',
-  lunch_end: 'Lunch end',
 };
 
 export default function Punches() {
@@ -126,7 +120,9 @@ export default function Punches() {
                     {dateLabel(p.ts)} · {formatTime(p.ts)}
                   </td>
                   <td className="px-5 py-3 text-creamSoft">{p.user_name}</td>
-                  <td className="px-5 py-3 text-creamSoft/80">{TYPE_LABEL[p.type] ?? p.type}</td>
+                  <td className={`px-5 py-3 font-medium ${punchTextClass(p.type as PunchType)}`}>
+                    {PUNCH_LABEL[p.type as PunchType] ?? p.type}
+                  </td>
                   <td className="px-5 py-3 text-creamSoft/60 hidden md:table-cell">
                     {p.location_name ?? '—'}
                   </td>
