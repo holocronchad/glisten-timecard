@@ -252,6 +252,27 @@ export default function Kiosk() {
         <Header now={now} />
       </div>
 
+      {/* Top-right corner shortcut links — fixed position so they are
+          always reachable, even when main content (PIN pad / GPS warnings)
+          is tall enough to push the footer below the viewport. */}
+      <div
+        className="fixed z-20 flex gap-1.5 right-3 sm:right-5"
+        style={{ top: 'max(env(safe-area-inset-top), 0.75rem)' }}
+      >
+        <a
+          href="/me"
+          className="text-white/85 hover:text-white text-[11px] sm:text-xs font-bold tracking-[0.2em] uppercase px-3 py-2 rounded-full bg-black/25 hover:bg-black/40 backdrop-blur-sm transition-colors"
+        >
+          My hours
+        </a>
+        <a
+          href="/manage"
+          className="text-white/85 hover:text-white text-[11px] sm:text-xs font-bold tracking-[0.2em] uppercase px-3 py-2 rounded-full bg-black/25 hover:bg-black/40 backdrop-blur-sm transition-colors"
+        >
+          Manager
+        </a>
+      </div>
+
       <main className="relative z-10 flex-1 flex items-center justify-center px-3 sm:px-6 pb-4 sm:pb-10 min-w-0">
         <div className="w-full max-w-[520px] min-w-0">
           <AnimatePresence mode="wait">
@@ -369,24 +390,10 @@ export default function Kiosk() {
       </main>
 
       <footer
-        className="relative z-10 shrink-0 px-4 sm:px-6 pt-3 text-white text-[11px] sm:text-xs font-bold flex justify-between items-center gap-3"
-        style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 1.5rem)' }}
+        className="relative z-10 shrink-0 px-4 sm:px-6 pt-3 text-white text-[11px] sm:text-xs font-bold flex justify-center items-center gap-3"
+        style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 1rem)' }}
       >
         <span className="tracking-[0.2em] uppercase">Glisten Timecard</span>
-        <div className="flex gap-2 sm:gap-3">
-          <a
-            href="/me"
-            className="tracking-[0.2em] uppercase px-3 py-2 rounded-full hover:bg-white/10 active:bg-white/15 transition-colors"
-          >
-            My hours
-          </a>
-          <a
-            href="/manage"
-            className="tracking-[0.2em] uppercase px-3 py-2 rounded-full hover:bg-white/10 active:bg-white/15 transition-colors"
-          >
-            Manager
-          </a>
-        </div>
       </footer>
 
       <AnimatePresence>
