@@ -1,18 +1,23 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { X, Plus } from 'lucide-react';
-import { api, ApiError, PunchType } from '../shared/api';
+import { api, ApiError } from '../shared/api';
 import { useAuth } from './auth';
 import { useToast } from '../shared/toast';
 
-// Add Hours modal — owner flow for inserting a missed punch on behalf of an
-// employee (Dr. Dawood asked for this 2026-04-29 because the lunch button
-// was being removed and she'd occasionally need to backfill). Mirrors
-// EditPunchModal but with an employee picker and no delete/flag toggle.
+// Add Hours modal — owner flow for backfilling missed punches.
 //
-// Lunch types intentionally excluded — kiosk lunch flow was removed
-// 2026-04-29; managers entering lunch retroactively would re-introduce
-// what we just took out.
+// Three modes (per Anas 2026-04-29 second pass):
+//   1. Clock-in only        — employee forgot to punch in
+//   2. Clock-out only       — employee forgot to punch out
+//   3. Full shift (in + out) — employee never punched at all
+//
+// Server endpoint POST /api/manage/punches takes a single punch; for the
+// "full shift" mode we just post twice in sequence. Each insert audit-logs
+// independently, which is fine — manager_edit source + the Reason text
+// makes provenance clear.
+//
+// Lunch types intentionally absent — only clock_in / clock_out backfill.
 
 type StaffRow = {
   id: number;
@@ -25,15 +30,15 @@ type Loc = { id: number; name: string; active: boolean };
 
 type Props = { onClose: () => void; onSaved: () => void };
 
-const TYPES: Array<{ value: PunchType; label: string; sub: string }> = [
-  { value: 'clock_in',  label: 'Clock in',  sub: 'Started the day' },
-  { value: 'clock_out', label: 'Clock out', sub: 'Ended the day' },
-];
-
 function nowLocalAz(): string {
   const az = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${az.getFullYear()}-${pad(az.getMonth() + 1)}-${pad(az.getDate())}T${pad(az.getHours())}:${pad(az.getMinutes())}`;
+}
+
+function localAzToIso(local: string): string {
+  // datetime-local field is naive; treat it as Arizona time (UTC-7, no DST).
+  return new Date(`${local}:00-07:00`).toISOString();
 }
 
 export default function AddHoursModal({ onClose, onSaved }: Props) {
@@ -42,8 +47,11 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
   const [staff, setStaff] = useState<StaffRow[] | null>(null);
   const [locations, setLocations] = useState<Loc[]>([]);
   const [userId, setUserId] = useState<number | null>(null);
-  const [type, setType] = useState<PunchType>('clock_in');
-  const [when, setWhen] = useState(nowLocalAz());
+
+  const [includeIn, setIncludeIn] = useState(true);
+  const [includeOut, setIncludeOut] = useState(true);
+  const [whenIn, setWhenIn] = useState(nowLocalAz());
+  const [whenOut, setWhenOut] = useState(nowLocalAz());
   const [locationId, setLocationId] = useState<number | null>(null);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -57,8 +65,6 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
           token: token ?? undefined,
         });
         if (!cancelled) {
-          // Only employees who actually punch the clock — exclude owners,
-          // exclude inactive accounts.
           const eligible = r.staff
             .filter((s) => s.active && s.track_hours && !s.is_owner)
             .sort((a, b) => a.name.localeCompare(b.name));
@@ -77,7 +83,7 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
           if (active.length > 0) setLocationId(active[0].id);
         }
       } catch {
-        /* locations are optional — server endpoint may not exist on older builds */
+        /* locations endpoint optional */
       }
     })();
     return () => {
@@ -90,26 +96,62 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
       setErr('Pick an employee.');
       return;
     }
+    if (!includeIn && !includeOut) {
+      setErr('Pick at least a clock-in or a clock-out.');
+      return;
+    }
+    if (includeIn && includeOut) {
+      const inMs = new Date(`${whenIn}:00-07:00`).getTime();
+      const outMs = new Date(`${whenOut}:00-07:00`).getTime();
+      if (!(outMs > inMs)) {
+        setErr('Clock-out time must be after clock-in time.');
+        return;
+      }
+    }
     if (reason.trim().length < 3) {
       setErr('Add a short reason for the audit log.');
       return;
     }
+
     setBusy(true);
     setErr(null);
     try {
-      const ts = new Date(`${when}:00-07:00`).toISOString();
-      await api('/manage/punches', {
-        method: 'POST',
-        token: token ?? undefined,
-        body: {
-          user_id: userId,
-          type,
-          ts,
-          location_id: locationId,
-          reason: reason.trim(),
-        },
-      });
-      toast('Hours added.');
+      // Insert in chronological order so the state machine stays valid for
+      // anyone who looks at history afterwards. POST /manage/punches is
+      // idempotent enough for our purposes — each call audit-logs separately.
+      if (includeIn) {
+        await api('/manage/punches', {
+          method: 'POST',
+          token: token ?? undefined,
+          body: {
+            user_id: userId,
+            type: 'clock_in',
+            ts: localAzToIso(whenIn),
+            location_id: locationId,
+            reason: reason.trim(),
+          },
+        });
+      }
+      if (includeOut) {
+        await api('/manage/punches', {
+          method: 'POST',
+          token: token ?? undefined,
+          body: {
+            user_id: userId,
+            type: 'clock_out',
+            ts: localAzToIso(whenOut),
+            location_id: locationId,
+            reason: reason.trim(),
+          },
+        });
+      }
+      const summary =
+        includeIn && includeOut
+          ? 'Full shift added.'
+          : includeIn
+          ? 'Clock-in added.'
+          : 'Clock-out added.';
+      toast(summary);
       onSaved();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : 'Save failed';
@@ -119,6 +161,15 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
       setBusy(false);
     }
   }
+
+  const ctaLabel =
+    includeIn && includeOut
+      ? 'Add full shift'
+      : includeIn
+      ? 'Add clock-in'
+      : includeOut
+      ? 'Add clock-out'
+      : 'Add hours';
 
   return (
     <motion.div
@@ -134,7 +185,7 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
         exit={{ y: 20, opacity: 0 }}
         transition={{ duration: 0.3, ease: [0.22, 0.61, 0.36, 1] }}
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-[480px] rounded-3xl bg-graphite border border-creamSoft/10 p-6"
+        className="w-full max-w-[480px] rounded-3xl bg-graphite border border-creamSoft/10 p-6 max-h-[90vh] overflow-y-auto"
       >
         <div className="flex items-start justify-between mb-5">
           <div>
@@ -142,7 +193,7 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
               Add <span className="font-serif italic text-cream">hours</span>
             </h2>
             <p className="text-creamSoft/50 text-sm mt-1">
-              Insert a clock-in or clock-out on an employee's behalf.
+              Backfill a missed clock-in, clock-out, or both.
             </p>
           </div>
           <button
@@ -175,43 +226,65 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
             </select>
           </label>
 
-          <div>
-            <span className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase">
-              Type
-            </span>
-            <div className="grid grid-cols-2 gap-2 mt-2">
-              {TYPES.map((t) => (
-                <button
-                  key={t.value}
-                  type="button"
-                  onClick={() => setType(t.value)}
-                  className={[
-                    'rounded-2xl py-3 px-3 text-sm tracking-tight border text-left transition-colors',
-                    type === t.value
-                      ? 'bg-cream text-ink border-cream'
-                      : 'bg-ink text-creamSoft/70 border-creamSoft/10 hover:border-creamSoft/30',
-                  ].join(' ')}
-                >
-                  <div className="font-medium">{t.label}</div>
-                  <div className={['text-xs', type === t.value ? 'text-ink/60' : 'text-creamSoft/40'].join(' ')}>
-                    {t.sub}
-                  </div>
-                </button>
-              ))}
-            </div>
+          {/* Clock-in row */}
+          <div
+            className={[
+              'rounded-2xl border p-4 transition-colors',
+              includeIn
+                ? 'bg-ink/60 border-creamSoft/20'
+                : 'bg-ink/30 border-creamSoft/5',
+            ].join(' ')}
+          >
+            <label className="flex items-center gap-2 text-creamSoft/85 text-sm tracking-tight cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeIn}
+                onChange={(e) => setIncludeIn(e.target.checked)}
+                className="accent-cream w-4 h-4"
+              />
+              <span className="text-xs tracking-[0.18em] uppercase text-creamSoft/60">
+                Clock-in
+              </span>
+            </label>
+            {includeIn && (
+              <input
+                type="datetime-local"
+                value={whenIn}
+                onChange={(e) => setWhenIn(e.target.value)}
+                className="mt-2 w-full bg-ink border border-creamSoft/10 rounded-xl px-3 py-2.5 text-creamSoft focus:outline-none focus:border-cream/40 transition-colors"
+              />
+            )}
           </div>
 
-          <label className="flex flex-col gap-1.5">
-            <span className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase">
-              When (Arizona time)
-            </span>
-            <input
-              type="datetime-local"
-              value={when}
-              onChange={(e) => setWhen(e.target.value)}
-              className="bg-ink border border-creamSoft/10 rounded-2xl px-4 py-3 text-creamSoft focus:outline-none focus:border-cream/40 transition-colors"
-            />
-          </label>
+          {/* Clock-out row */}
+          <div
+            className={[
+              'rounded-2xl border p-4 transition-colors',
+              includeOut
+                ? 'bg-ink/60 border-creamSoft/20'
+                : 'bg-ink/30 border-creamSoft/5',
+            ].join(' ')}
+          >
+            <label className="flex items-center gap-2 text-creamSoft/85 text-sm tracking-tight cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeOut}
+                onChange={(e) => setIncludeOut(e.target.checked)}
+                className="accent-cream w-4 h-4"
+              />
+              <span className="text-xs tracking-[0.18em] uppercase text-creamSoft/60">
+                Clock-out
+              </span>
+            </label>
+            {includeOut && (
+              <input
+                type="datetime-local"
+                value={whenOut}
+                onChange={(e) => setWhenOut(e.target.value)}
+                className="mt-2 w-full bg-ink border border-creamSoft/10 rounded-xl px-3 py-2.5 text-creamSoft focus:outline-none focus:border-cream/40 transition-colors"
+              />
+            )}
+          </div>
 
           {locations.length > 1 && (
             <label className="flex flex-col gap-1.5">
@@ -240,7 +313,7 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
               type="text"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="e.g., forgot to clock in this morning"
+              placeholder="e.g., forgot to punch in this morning"
               className="bg-ink border border-creamSoft/10 rounded-2xl px-4 py-3 text-creamSoft placeholder-creamSoft/30 focus:outline-none focus:border-cream/40 transition-colors"
             />
           </label>
@@ -261,11 +334,16 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
             </button>
             <button
               onClick={save}
-              disabled={busy || userId == null || reason.trim().length < 3}
+              disabled={
+                busy ||
+                userId == null ||
+                (!includeIn && !includeOut) ||
+                reason.trim().length < 3
+              }
               className="flex-[2] rounded-2xl py-3 bg-cream text-ink hover:bg-cream/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm tracking-tight font-medium inline-flex items-center justify-center gap-2"
             >
               <Plus size={16} />
-              {busy ? 'Adding…' : 'Add hours'}
+              {busy ? 'Adding…' : ctaLabel}
             </button>
           </div>
         </div>
