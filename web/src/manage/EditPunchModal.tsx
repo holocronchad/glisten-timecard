@@ -102,13 +102,16 @@ export default function EditPunchModal({ punch, onClose, onSaved }: Props) {
   }
 
   async function remove() {
-    if (reason.trim().length < 3) {
-      setErr('Add a reason before deleting.');
-      return;
-    }
+    // Reason is required by the server for the audit-log row. If the
+    // manager clicks Delete without typing one, fall back to a generic
+    // "deleted by manager" reason instead of refusing — Dr. Dawood was
+    // hitting this and assuming delete was broken.
+    const finalReason = reason.trim().length >= 3
+      ? reason.trim()
+      : 'Deleted by manager via dashboard';
     if (
       !window.confirm(
-        `Delete this ${punch.type.replace('_', ' ')} punch for ${punch.user_name}? The before-state is recorded in the audit log so it can be restored from there if needed.`,
+        `Delete this ${punch.type.replace('_', ' ')} punch for ${punch.user_name}?\n\nThis can't be undone from the dashboard, but the before-state is in the audit log so we can restore it from there if needed.`,
       )
     ) {
       return;
@@ -119,7 +122,7 @@ export default function EditPunchModal({ punch, onClose, onSaved }: Props) {
       await api(`/manage/punches/${punch.id}`, {
         method: 'DELETE',
         token: token ?? undefined,
-        body: { reason },
+        body: { reason: finalReason },
       });
       toast('Punch deleted.');
       try {
@@ -253,21 +256,21 @@ export default function EditPunchModal({ punch, onClose, onSaved }: Props) {
 
         {err && <p className="text-amber-300/80 text-sm mt-3">{err}</p>}
 
-        <div className="flex gap-2 mt-5">
-          <button
-            onClick={remove}
-            disabled={busy || reason.trim().length < 3}
-            className="inline-flex items-center justify-center gap-1.5 rounded-full border border-creamSoft/15 hover:bg-amber-300/10 hover:border-amber-300/30 text-amber-300/80 px-4 py-3 text-sm tracking-tight disabled:opacity-50"
-            title="Delete this punch"
-          >
-            <Trash2 size={14} />
-          </button>
+        <div className="flex flex-col gap-2.5 mt-5">
           <button
             onClick={save}
             disabled={busy || reason.trim().length < 3}
-            className="flex-1 rounded-full bg-cream text-ink py-3 tracking-tight disabled:opacity-50"
+            className="rounded-full bg-cream text-ink py-3 tracking-tight font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {busy ? 'Saving…' : 'Save change'}
+          </button>
+          <button
+            onClick={remove}
+            disabled={busy}
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-clockOut/40 bg-clockOutDeep/10 hover:bg-clockOutDeep/25 text-clockOut px-4 py-2.5 text-sm tracking-tight font-medium disabled:opacity-50"
+            title="Delete this punch entirely"
+          >
+            <Trash2 size={14} /> Delete punch
           </button>
         </div>
       </motion.div>
