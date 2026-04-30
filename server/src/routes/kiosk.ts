@@ -476,10 +476,53 @@ router.post('/punch', async (req, res) => {
     return;
   }
 
-  // WFH PIN bypass — skip the geofence check entirely. We still record the
-  // punch with whatever lat/lng the browser reported (audit log) but no
-  // location_id, since the punch isn't tied to a specific office.
+  // Fetch latest punch up front — we need it for state machine, geofence
+  // relaxation, AND stale-shift auto-close below.
+  let latest = await getLatestPunch(user.id);
+
+  // Stale-shift auto-close. If the user is trying to clock_in but the system
+  // sees an unclosed clock_in / lunch_start from > 16 hours ago, close it
+  // first (with the auto_close source) so this morning's clock_in can proceed.
+  // 16 hours covers an overnight + a generous buffer; the daily 6:59 AM AZ
+  // cron runs an hour earlier in normal flow, this is the safety net for
+  // employees who arrive before the cron has fired.
+  if (
+    type === 'clock_in' &&
+    latest != null &&
+    (latest.type === 'clock_in' || latest.type === 'lunch_start') &&
+    Date.now() - new Date(latest.ts).getTime() > 16 * 60 * 60 * 1000
+  ) {
+    const closeType: PunchType = latest.type === 'clock_in' ? 'clock_out' : 'lunch_end';
+    const closeTs = new Date(
+      new Date(latest.ts).getTime() + 8 * 60 * 60 * 1000  // start + 8h
+    );
+    await recordPunch({
+      userId: user.id,
+      locationId: latest.location_id,
+      type: closeType,
+      source: 'auto_close',
+      ts: closeTs,
+      flagged: true,
+      flagReason: `auto_close_stale_shift_at_clock_in (was ${latest.type} from ${new Date(latest.ts).toISOString()})`,
+      autoClosedAt: new Date(),
+    });
+    latest = await getLatestPunch(user.id);
+  }
+
+  // Geofence resolution. Three paths:
+  //   1. Remote PIN → no geofence, no location.
+  //   2. Inside a known office geofence → tie punch to that office.
+  //   3. Outside geofence on a NON-clock_in punch where the previous punch
+  //      was at a known office within the last 12 hours → allow, flag for
+  //      review, inherit the previous location_id. This unblocks the common
+  //      failure where WiFi-based geolocation drifts past the 150m radius
+  //      right when the employee is mid-shift transitioning (start lunch,
+  //      end lunch, clock out). clock_in stays strict — that's the anti-
+  //      fraud boundary, can't allow it from anywhere.
   let officeId: number | null = null;
+  let geofenceFlagged = false;
+  let geofenceFlagReason: string | null = null;
+
   if (usedRemotePin) {
     officeId = null;
   } else {
@@ -487,17 +530,41 @@ router.post('/punch', async (req, res) => {
       `SELECT id, lat, lng, geofence_m, active FROM timeclock.locations WHERE active = true`
     );
     const office = matchLocation({ lat, lng }, locations as any);
-    if (!office) {
-      res.status(403).json({
-        error: 'Outside office',
-        message: 'You can only punch when you are at a Glisten Dental office.',
-      });
-      return;
+    if (office) {
+      officeId = office.id;
+    } else {
+      // Outside geofence — try the mid-shift relaxation. Anything except
+      // clock_in is eligible if we have a known prior office and the last
+      // punch is recent.
+      const previousOpens: Record<string, PunchType[]> = {
+        lunch_end:   ['lunch_start'],
+        lunch_start: ['clock_in', 'lunch_end'],
+        clock_out:   ['clock_in', 'lunch_end'],
+      };
+      const eligibleOpens = previousOpens[type] ?? [];
+      const isMidShift = type !== 'clock_in';
+      const canRelax =
+        isMidShift &&
+        latest != null &&
+        eligibleOpens.includes(latest.type) &&
+        latest.location_id != null &&
+        Date.now() - new Date(latest.ts).getTime() < 12 * 60 * 60 * 1000;
+
+      if (canRelax && latest && latest.location_id != null) {
+        officeId = latest.location_id;
+        geofenceFlagged = true;
+        geofenceFlagReason =
+          `GPS reported outside office geofence at ${type}; auto-allowed because ${latest.type} was recorded at this location ${new Date(latest.ts).toISOString()}.`;
+      } else {
+        res.status(403).json({
+          error: 'Outside office',
+          message: 'You can only punch when you are at a Glisten Dental office.',
+        });
+        return;
+      }
     }
-    officeId = office.id;
   }
 
-  const latest = await getLatestPunch(user.id);
   const allowed = nextAllowedPunches(latest);
   if (!allowed.includes(type as PunchType)) {
     res.status(409).json({
@@ -514,6 +581,28 @@ router.post('/punch', async (req, res) => {
     req.ip ||
     null;
 
+  // Per-user primary-PIN monitor (added 2026-04-29). Filza Tirmizi (id=16)
+  // has a different rate for WFH vs in-office, and her WFH PIN bypasses
+  // geofence by design. The concern: she could RDP into an office PC from
+  // home and use her primary PIN there — that punch would pass the geofence
+  // check (the office PC's browser geolocates inside the office) AND record
+  // location_id=office, claiming the in-office rate from home. We can't
+  // detect that scenario server-side perfectly, so we surface it for review:
+  // every primary-PIN punch from Filza gets flagged so Dr. Dawood sees it
+  // in the manager queue and can corroborate against the schedule.
+  const PRIMARY_PIN_MONITORED_USERS = new Set<number>([16]);
+  let monitorFlagged = false;
+  let monitorFlagReason: string | null = null;
+  if (PRIMARY_PIN_MONITORED_USERS.has(user.id) && !usedRemotePin) {
+    monitorFlagged = true;
+    monitorFlagReason = `primary_pin_review: ${user.name} uses a different rate WFH; this punch is in-office, please verify.`;
+  }
+
+  const finalFlagged = geofenceFlagged || monitorFlagged;
+  const finalFlagReason = [geofenceFlagReason, monitorFlagReason]
+    .filter(Boolean)
+    .join(' | ') || null;
+
   const punch = await recordPunch({
     userId: user.id,
     locationId: officeId,
@@ -525,7 +614,11 @@ router.post('/punch', async (req, res) => {
     // Remote-PIN punches set geofencePass = true (the punch is allowed) but
     // location_id is null — the punch shows up flagged-as-remote on manager
     // views via the null location_id rather than a flag column.
-    geofencePass: true,
+    // Closing punches outside the geofence are recorded WITH a location_id
+    // (inherited from the matching open) AND flagged for manager review.
+    geofencePass: !geofenceFlagged,
+    flagged: finalFlagged,
+    flagReason: finalFlagReason,
   });
 
   res.json({

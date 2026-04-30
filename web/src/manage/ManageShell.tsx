@@ -1,7 +1,10 @@
 import { ReactNode, useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Plus } from 'lucide-react';
+import { AnimatePresence } from 'framer-motion';
 import { useAuth } from './auth';
 import { api } from '../shared/api';
+import AddHoursModal from './AddHoursModal';
 
 const TABS = [
   { to: 'today', label: 'Today' },
@@ -18,6 +21,8 @@ export default function ManageShell({ children }: { children?: ReactNode }) {
   const { token, user, clear } = useAuth();
   const nav = useNavigate();
   const [pendingCount, setPendingCount] = useState(0);
+  const [addHoursOpen, setAddHoursOpen] = useState(false);
+  const [addHoursNonce, setAddHoursNonce] = useState(0);
 
   function logout() {
     clear();
@@ -82,6 +87,16 @@ export default function ManageShell({ children }: { children?: ReactNode }) {
           </nav>
         </div>
         <div className="flex items-center gap-4 text-sm">
+          {user?.is_owner && (
+            <button
+              onClick={() => setAddHoursOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-cream text-ink hover:bg-cream/90 transition-colors text-sm tracking-tight font-medium"
+              title="Add hours for an employee"
+            >
+              <Plus size={14} />
+              <span className="hidden sm:inline">Add hours</span>
+            </button>
+          )}
           <span className="text-creamSoft/50 hidden sm:inline">
             {user?.name}{' '}
             {user?.is_owner && (
@@ -100,6 +115,21 @@ export default function ManageShell({ children }: { children?: ReactNode }) {
       <main className="flex-1 px-6 sm:px-10 py-8 max-w-[1200px] mx-auto w-full">
         {children ?? <Outlet />}
       </main>
+
+      <AnimatePresence>
+        {addHoursOpen && (
+          <AddHoursModal
+            key={addHoursNonce}
+            onClose={() => setAddHoursOpen(false)}
+            onSaved={() => {
+              setAddHoursOpen(false);
+              // Bump nonce so any open list view that watches this state could
+              // refresh; main list views poll every 30-60s so they'll catch up.
+              setAddHoursNonce((n) => n + 1);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
