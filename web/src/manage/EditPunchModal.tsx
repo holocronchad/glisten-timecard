@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { X, Trash2 } from 'lucide-react';
 import { api, ApiError, PunchType } from '../shared/api';
 import { useAuth } from './auth';
 import { useToast } from '../shared/toast';
+
+type Loc = { id: number; name: string; active: boolean };
 
 type Props = {
   punch: {
@@ -12,6 +14,8 @@ type Props = {
     type: string;
     ts: string;
     flagged: boolean;
+    location_id: number | null;
+    location_name?: string | null;
   };
   onClose: () => void;
   onSaved: () => void;
@@ -35,20 +39,50 @@ export default function EditPunchModal({ punch, onClose, onSaved }: Props) {
   const { toast } = useToast();
   const [type, setType] = useState<PunchType>(punch.type as PunchType);
   const [when, setWhen] = useState(isoToLocalAz(punch.ts));
+  // locationId is one of: number (office id) | null (remote / WFH).
+  // Using -1 internally as a sentinel ONLY for the unselected initial state
+  // would conflict with valid IDs, so we keep null = remote and check
+  // strict-equality below.
+  const [locationId, setLocationId] = useState<number | null>(punch.location_id);
   const [flagged, setFlagged] = useState(punch.flagged);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [locations, setLocations] = useState<Loc[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api<{ locations: Loc[] }>('/manage/locations', {
+          token: token ?? undefined,
+        });
+        if (!cancelled) setLocations(r.locations.filter((l) => l.active));
+      } catch {
+        /* leave empty — picker will show only the current value */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   async function save() {
     setBusy(true);
     setErr(null);
     try {
       const ts = new Date(`${when}:00-07:00`).toISOString();
+      const body: Record<string, unknown> = { ts, type, flagged, reason };
+      // Only include location_id if the manager actually changed it; the
+      // server uses key presence to distinguish "leave alone" from
+      // "set to remote (null)".
+      if (locationId !== punch.location_id) {
+        body.location_id = locationId;
+      }
       await api(`/manage/punches/${punch.id}`, {
         method: 'PATCH',
         token: token ?? undefined,
-        body: { ts, type, flagged, reason },
+        body,
       });
       toast('Punch updated.');
       onSaved();
@@ -157,6 +191,26 @@ export default function EditPunchModal({ punch, onClose, onSaved }: Props) {
               onChange={(e) => setWhen(e.target.value)}
               className="bg-ink border border-creamSoft/10 rounded-2xl px-4 py-3 text-creamSoft focus:outline-none focus:border-cream/40 transition-colors"
             />
+          </label>
+
+          <label className="flex flex-col gap-1.5">
+            <span className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase">
+              Office
+            </span>
+            <select
+              value={locationId === null ? 'remote' : String(locationId)}
+              onChange={(e) =>
+                setLocationId(e.target.value === 'remote' ? null : Number(e.target.value))
+              }
+              className="bg-ink border border-creamSoft/10 rounded-2xl px-4 py-3 text-creamSoft focus:outline-none focus:border-cream/40 transition-colors"
+            >
+              {locations.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+              <option value="remote">Remote / WFH (no office)</option>
+            </select>
           </label>
 
           <label className="flex items-center gap-2 text-sm text-creamSoft/70">

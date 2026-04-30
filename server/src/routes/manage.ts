@@ -447,6 +447,11 @@ router.get('/employees/:id', async (req, res) => {
 const editPunchSchema = z.object({
   ts: z.string().datetime().optional(),
   type: z.enum(['clock_in', 'clock_out', 'lunch_start', 'lunch_end']).optional(),
+  // location_id: nullable = remote / WFH (mirrors WFH-PIN punches that record
+  // location_id=NULL). Manager edit lets Dr. Dawood reassign a punch logged
+  // to the wrong office. Send `null` explicitly for remote, omit to leave
+  // the location untouched.
+  location_id: z.number().int().positive().nullable().optional(),
   flagged: z.boolean().optional(),
   reason: z.string().min(1).max(500),
 });
@@ -470,7 +475,7 @@ router.patch('/punches/:id', async (req, res) => {
 
   const result = await withTransaction<Result>(async (client) => {
     const before = await client.query(
-      `SELECT id, user_id, type, ts, flagged, flag_reason, source FROM timeclock.punches WHERE id = $1 FOR UPDATE`,
+      `SELECT id, user_id, type, ts, location_id, flagged, flag_reason, source FROM timeclock.punches WHERE id = $1 FOR UPDATE`,
       [id],
     );
     if (before.rowCount === 0) {
@@ -486,6 +491,13 @@ router.patch('/punches/:id', async (req, res) => {
       params.push(patch.type);
       updates.push(`type = $${params.length}`);
     }
+    // `location_id` is in the patch only if the manager touched the picker.
+    // `null` is a meaningful value (= remote / WFH), so use a key check
+    // rather than truthiness.
+    if ('location_id' in patch) {
+      params.push(patch.location_id);
+      updates.push(`location_id = $${params.length}`);
+    }
     if (typeof patch.flagged === 'boolean') {
       params.push(patch.flagged);
       updates.push(`flagged = $${params.length}`);
@@ -496,7 +508,7 @@ router.patch('/punches/:id', async (req, res) => {
     params.push(id);
     const updated = await client.query(
       `UPDATE timeclock.punches SET ${updates.join(', ')} WHERE id = $${params.length}
-       RETURNING id, user_id, type, ts, flagged, flag_reason, source`,
+       RETURNING id, user_id, type, ts, location_id, flagged, flag_reason, source`,
       params,
     );
     await client.query(

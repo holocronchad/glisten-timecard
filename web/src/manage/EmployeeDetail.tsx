@@ -269,6 +269,8 @@ export default function EmployeeDetail() {
               type: editing.type,
               ts: editing.ts,
               flagged: editing.flagged,
+              location_id: editing.location_id,
+              location_name: editing.location_name ?? null,
             }}
             onClose={() => setEditing(null)}
             onSaved={() => {
