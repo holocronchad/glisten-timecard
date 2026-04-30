@@ -23,6 +23,34 @@ export default function PinPad({ onSubmit, shake, disabled }: Props) {
     }
   }, [pin, disabled, onSubmit]);
 
+  // Keyboard input — Dr. Dawood asked for hardware-PIN-pad / numpad / top-row
+  // digits to work alongside on-screen taps. Guards:
+  //   - skip when disabled (mid-PIN-validation state)
+  //   - skip when any modifier (Cmd/Ctrl/Alt) is held — preserves browser
+  //     shortcuts like Cmd-1 for tab switch
+  //   - skip when focus is in an INPUT / TEXTAREA / contentEditable, so
+  //     typing in the AddHours / EditPunch / MissedPunch / Register modals
+  //     does NOT also fill the underlying PIN
+  // Backspace + Delete both map to the 'del' on-screen key.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (disabled) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+
+      if (e.key >= '0' && e.key <= '9') {
+        e.preventDefault();
+        setPin((p) => (p.length >= 4 ? p : p + e.key));
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        setPin((p) => p.slice(0, -1));
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [disabled]);
+
   function press(k: string) {
     if (disabled) return;
     if (k === 'del') {
