@@ -16,7 +16,11 @@ import { pool, query } from '../db';
 const OFFICES = [
   {
     slug: 'glisten-gilbert',
-    name: 'Glisten Dental Studio',
+    // Display name only — Dr. Dawood's request 2026-04-29: in the
+    // timecard UI we call it "Glisten Dental Gilbert" to match the
+    // city-pair naming with Mesa + Glendale. The public website + WP
+    // site still use "Glisten Dental Studio". Timecard scope only.
+    name: 'Glisten Dental Gilbert',
     address: '4365 E Pecos Rd, Ste 127, Gilbert, AZ 85295',
     lat: 33.289685,
     lng: -111.694468,
