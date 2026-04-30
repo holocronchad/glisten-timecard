@@ -295,20 +295,20 @@ export default function Kiosk() {
       </main>
 
       <footer
-        className="relative z-10 px-4 sm:px-6 pb-4 sm:pb-6 text-white text-[10px] sm:text-xs font-bold flex justify-between items-center gap-3"
-        style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 1rem)' }}
+        className="relative z-10 shrink-0 px-4 sm:px-6 pt-3 text-white text-[11px] sm:text-xs font-bold flex justify-between items-center gap-3"
+        style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 1.5rem)' }}
       >
         <span className="tracking-[0.2em] uppercase">Glisten Timecard</span>
-        <div className="flex gap-5">
+        <div className="flex gap-2 sm:gap-3">
           <a
             href="/me"
-            className="tracking-[0.2em] uppercase hover:text-cream transition-colors"
+            className="tracking-[0.2em] uppercase px-3 py-2 rounded-full hover:bg-white/10 active:bg-white/15 transition-colors"
           >
             My hours
           </a>
           <a
             href="/manage"
-            className="tracking-[0.2em] uppercase hover:text-cream transition-colors"
+            className="tracking-[0.2em] uppercase px-3 py-2 rounded-full hover:bg-white/10 active:bg-white/15 transition-colors"
           >
             Manager
           </a>
