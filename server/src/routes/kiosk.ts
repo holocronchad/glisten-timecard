@@ -13,7 +13,9 @@ import { findUserByPin, hashPin } from '../auth/pin';
 import { signManagerToken } from '../auth/jwt';
 import { matchLocation } from '../services/geofence';
 import {
-  getLatestPunch, nextAllowedPunches, recordPunch, type PunchType,
+  getLatestPunch, nextAllowedPunches, recordPunch,
+  shiftRequiresLunchAttestation, LUNCH_ATTESTATION_THRESHOLD_HOURS,
+  type PunchType,
 } from '../services/punches';
 import { cprDaysUntil } from '../services/cpr';
 import { matchRoster, type RosterCandidate } from '../services/nameMatch';
@@ -458,6 +460,10 @@ const punchSchema = z.object({
   type: z.enum(['clock_in', 'clock_out', 'lunch_start', 'lunch_end']),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
+  // Optional. When the kiosk gets a 422 attestation_required response on a
+  // clock_out attempt, it pops a modal asking why the employee didn't take
+  // a lunch break and resubmits with this field set.
+  no_lunch_reason: z.string().min(2).max(500).optional(),
 });
 
 router.post('/punch', async (req, res) => {
@@ -467,7 +473,7 @@ router.post('/punch', async (req, res) => {
     return;
   }
 
-  const { pin, type, lat, lng } = parsed.data;
+  const { pin, type, lat, lng, no_lunch_reason } = parsed.data;
   const result = await findUserByPin(pin);
   if (!result.ok) {
     res.status(401).json({ error: result.reason === 'locked' ? 'Locked' : 'Invalid PIN' });
@@ -617,6 +623,30 @@ router.post('/punch', async (req, res) => {
     .filter(Boolean)
     .join(' | ') || null;
 
+  // No-lunch attestation gate (Anas + Dr. Dawood 2026-04-29). On a clock_out,
+  // if the open shift is ≥ LUNCH_ATTESTATION_THRESHOLD_HOURS hours and has
+  // no lunch_start in it, the kiosk must collect a reason from the employee
+  // before we record the clock_out. Once the kiosk pops the modal and the
+  // employee types a reason, the same request is resubmitted with
+  // no_lunch_reason set; we accept it then. Empty / whitespace-only reason
+  // also fails so a determined user can't just bypass with " ".
+  if (type === 'clock_out') {
+    const cleanedReason = (no_lunch_reason ?? '').trim();
+    const att = await shiftRequiresLunchAttestation(user.id);
+    if (att.required && cleanedReason.length < 2) {
+      res.status(422).json({
+        error: 'lunch_attestation_required',
+        message:
+          `You've been on the clock for ${att.hours_worked} hours and ` +
+          'haven\'t taken a lunch break. Please tell us why before clocking out.',
+        hours_worked: att.hours_worked,
+        threshold_hours: LUNCH_ATTESTATION_THRESHOLD_HOURS,
+        shift_start: att.shift_start?.toISOString() ?? null,
+      });
+      return;
+    }
+  }
+
   const punch = await recordPunch({
     userId: user.id,
     locationId: officeId,
@@ -633,6 +663,7 @@ router.post('/punch', async (req, res) => {
     geofencePass: !geofenceFlagged,
     flagged: finalFlagged,
     flagReason: finalFlagReason,
+    noLunchReason: type === 'clock_out' ? (no_lunch_reason ?? null) : null,
   });
 
   res.json({

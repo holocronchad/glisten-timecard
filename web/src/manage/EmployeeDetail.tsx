@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, ChevronLeft, ChevronRight, Flag, Pencil } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, Flag, Pencil, Coffee } from 'lucide-react';
 import { api } from '../shared/api';
 import { useAuth } from './auth';
 import { formatTime } from '../shared/geo';
@@ -34,6 +34,7 @@ type EmployeeDetailResponse = {
     flagged: boolean;
     flag_reason: string | null;
     auto_closed_at: string | null;
+    no_lunch_reason: string | null;
   }>;
   missed: Array<{
     id: number;
@@ -222,15 +223,25 @@ export default function EmployeeDetail() {
                     {p.source}
                   </td>
                   <td className="px-5 py-3 text-right">
-                    {p.flagged ? (
-                      <span className="inline-flex items-center gap-1 text-amber-300/80 text-xs">
-                        <Flag size={12} /> {p.flag_reason ?? 'flagged'}
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-creamSoft/30 text-xs opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Pencil size={12} /> Edit
-                      </span>
-                    )}
+                    <div className="inline-flex items-center gap-2 justify-end flex-wrap">
+                      {p.no_lunch_reason && (
+                        <span
+                          className="inline-flex items-center gap-1 text-lunchAccent text-xs max-w-[260px] truncate"
+                          title={`No lunch break — ${p.no_lunch_reason}`}
+                        >
+                          <Coffee size={12} /> no lunch · {p.no_lunch_reason}
+                        </span>
+                      )}
+                      {p.flagged ? (
+                        <span className="inline-flex items-center gap-1 text-amber-300/80 text-xs">
+                          <Flag size={12} /> {p.flag_reason ?? 'flagged'}
+                        </span>
+                      ) : !p.no_lunch_reason ? (
+                        <span className="inline-flex items-center gap-1 text-creamSoft/30 text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Pencil size={12} /> Edit
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               ))}

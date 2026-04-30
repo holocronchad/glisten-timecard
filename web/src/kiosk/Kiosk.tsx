@@ -5,6 +5,7 @@ import PinPad from './PinPad';
 import NameReveal from './NameReveal';
 import Confirmation from './Confirmation';
 import MissedPunchModal from './MissedPunchModal';
+import NoLunchAttestModal from './NoLunchAttestModal';
 import RegisterModal from './RegisterModal';
 import CloudBackground from './CloudBackground';
 import {
@@ -80,6 +81,14 @@ export default function Kiosk() {
 
   const [missedOpen, setMissedOpen] = useState(false);
   const [missedConfirm, setMissedConfirm] = useState(false);
+  // Lunch-break attestation modal context. Set when server returns 422
+  // requires_lunch_attestation on a clock_out attempt; cleared when the
+  // user submits a reason or cancels.
+  const [attest, setAttest] = useState<{
+    type: PunchType;
+    hoursWorked: number;
+    thresholdHours: number;
+  } | null>(null);
 
   const reset = useCallback(() => {
     setPhase({ kind: 'pin' });
@@ -163,7 +172,10 @@ export default function Kiosk() {
     }
   }
 
-  async function handlePunch(type: PunchType) {
+  async function handlePunch(
+    type: PunchType,
+    noLunchReasonOverride?: string,
+  ) {
     // Click-instrumentation: log every tap so future silent failures are
     // diagnosable. (Local console only; cheap, privacy-safe.)
     // eslint-disable-next-line no-console
@@ -172,6 +184,7 @@ export default function Kiosk() {
       phase: phase.kind,
       hasCoords: !!coords,
       gpsState,
+      hasAttestation: !!noLunchReasonOverride,
       ts: new Date().toISOString(),
     });
 
@@ -222,6 +235,9 @@ export default function Kiosk() {
         body.lat = punchCoords.lat;
         body.lng = punchCoords.lng;
       }
+      if (type === 'clock_out' && noLunchReasonOverride) {
+        body.no_lunch_reason = noLunchReasonOverride;
+      }
       const result = await api<PunchResponse>('/kiosk/punch', {
         method: 'POST',
         body,
@@ -232,6 +248,27 @@ export default function Kiosk() {
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[kiosk] punch failed', e);
+
+      // 422 lunch_attestation_required: server says this clock-out shift is
+      // ≥7 hours with no lunch break, employee must answer why first. Pop
+      // the modal; the modal's onSubmit re-calls handlePunch with the reason.
+      if (
+        e instanceof ApiError &&
+        e.status === 422 &&
+        e.code === 'lunch_attestation_required'
+      ) {
+        const data = e.data as
+          | { hours_worked?: number; threshold_hours?: number }
+          | undefined;
+        setAttest({
+          type,
+          hoursWorked: data?.hours_worked ?? 8,
+          thresholdHours: data?.threshold_hours ?? 7,
+        });
+        setPhase({ kind: 'name', pin, lookup }); // back to buttons under the modal
+        return;
+      }
+
       const msg =
         e instanceof ApiError
           ? e.status === 403
@@ -436,6 +473,21 @@ export default function Kiosk() {
             onRequestGps={requestGps}
             onClose={() => setRegisterOpenForPin(null)}
             onRegistered={handleRegistered}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {attest && phase.kind === 'name' && (
+          <NoLunchAttestModal
+            hoursWorked={attest.hoursWorked}
+            thresholdHours={attest.thresholdHours}
+            onCancel={() => setAttest(null)}
+            onSubmit={async (reason) => {
+              const t = attest.type;
+              setAttest(null);
+              await handlePunch(t, reason);
+            }}
           />
         )}
       </AnimatePresence>

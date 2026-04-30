@@ -377,7 +377,8 @@ router.get('/punches', async (req, res) => {
 
   const { rows } = await query(
     `SELECT p.id, p.user_id, u.name AS user_name, p.location_id, l.name AS location_name,
-            p.type, p.ts, p.source, p.flagged, p.flag_reason, p.geofence_pass, p.auto_closed_at
+            p.type, p.ts, p.source, p.flagged, p.flag_reason, p.geofence_pass, p.auto_closed_at,
+            p.no_lunch_reason
      FROM timeclock.punches p
      JOIN timeclock.users u ON u.id = p.user_id
      LEFT JOIN timeclock.locations l ON l.id = p.location_id
@@ -417,7 +418,8 @@ router.get('/employees/:id', async (req, res) => {
 
   const { rows: punches } = await query(
     `SELECT p.id, p.location_id, l.name AS location_name, p.type, p.ts,
-            p.source, p.flagged, p.flag_reason, p.geofence_pass, p.auto_closed_at
+            p.source, p.flagged, p.flag_reason, p.geofence_pass, p.auto_closed_at,
+            p.no_lunch_reason
      FROM timeclock.punches p
      LEFT JOIN timeclock.locations l ON l.id = p.location_id
      WHERE p.user_id = $1 AND p.ts >= $2 AND p.ts < $3
