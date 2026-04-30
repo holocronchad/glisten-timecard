@@ -38,22 +38,21 @@ export async function getLatestPunch(userId: number): Promise<PunchRow | null> {
 /**
  * Compute which punch types the user is allowed to record next.
  *
- * State machine (lunch removed 2026-04-29 per Dr. Dawood — staff workaround
- * was clocking out + back in over lunch hour, lunch button was silently
- * failing for ~half the staff anyway):
- *   no punches yet      -> [clock_in]
- *   last = clock_in     -> [clock_out]
- *   last = clock_out    -> [clock_in]
- *
- * Old lunch_start / lunch_end rows still exist in the DB and render fine on
- * the manager history view; we simply never offer the action to new clicks.
+ * State machine (lunch RESTORED 2026-04-29 evening per Dr. Dawood reversal —
+ * the silent-failure root cause was the kiosk's 30s name-phase auto-reset
+ * timer, not the button itself):
+ *   no punches yet                       -> [clock_in]
+ *   last = clock_in                      -> [clock_out, lunch_start]
+ *   last = lunch_start                   -> [lunch_end]
+ *   last = lunch_end                     -> [clock_out, lunch_start]   (rare 2nd lunch)
+ *   last = clock_out                     -> [clock_in]
  */
 export function nextAllowedPunches(latest: PunchRow | null): PunchType[] {
   if (!latest) return ['clock_in'];
   switch (latest.type) {
-    case 'clock_in':    return ['clock_out'];
-    case 'lunch_start': return ['clock_out'];   // legacy state, get them off lunch
-    case 'lunch_end':   return ['clock_out'];   // legacy state, just resume to end-of-day
+    case 'clock_in':    return ['clock_out', 'lunch_start'];
+    case 'lunch_start': return ['lunch_end'];
+    case 'lunch_end':   return ['clock_out', 'lunch_start'];
     case 'clock_out':   return ['clock_in'];
     default:            return ['clock_in'];
   }

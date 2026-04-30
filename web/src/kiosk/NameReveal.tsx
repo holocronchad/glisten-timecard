@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { LogIn, LogOut } from 'lucide-react';
+import { LogIn, LogOut, Coffee, Utensils } from 'lucide-react';
 import { CprState, PunchType } from '../shared/api';
 import CprPanel from './CprPanel';
 
@@ -15,17 +15,14 @@ type Props = {
   onCancel: () => void;
   onMissedPunch: () => void;
   geofenceWarning?: boolean;
+  countdownMs?: number | null;
 };
 
-// Lunch removed 2026-04-29 per Dr. Dawood. Defensive: server's
-// nextAllowedPunches no longer returns lunch_start / lunch_end either, so
-// these branches won't render — kept for type-completeness if a stale
-// frontend ever sees a stale payload.
 const META: Record<PunchType, { label: string; sub: string; icon: any }> = {
   clock_in: { label: 'Clock in', sub: 'Start your day', icon: LogIn },
   clock_out: { label: 'Clock out', sub: 'End your day', icon: LogOut },
-  lunch_start: { label: 'Clock out', sub: 'End your day', icon: LogOut },
-  lunch_end: { label: 'Clock out', sub: 'End your day', icon: LogOut },
+  lunch_start: { label: 'Start lunch', sub: 'Take a break', icon: Coffee },
+  lunch_end: { label: 'End lunch', sub: 'Back to work', icon: Utensils },
 };
 
 export default function NameReveal({
@@ -39,6 +36,7 @@ export default function NameReveal({
   onCancel,
   onMissedPunch,
   geofenceWarning,
+  countdownMs,
 }: Props) {
   const first = name.split(' ')[0];
   const [cpr, setCpr] = useState<CprState>(initialCpr);
@@ -131,6 +129,15 @@ export default function NameReveal({
       </motion.div>
 
       <div className="flex flex-col items-center gap-3 mt-1">
+        {countdownMs != null && countdownMs > 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="text-amber-300/80 text-xs tracking-tight"
+          >
+            Resetting in {Math.ceil(countdownMs / 1000)}s — tap a button or it'll go back to PIN entry
+          </motion.div>
+        )}
         <button
           type="button"
           onClick={onMissedPunch}

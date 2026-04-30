@@ -30,6 +30,14 @@ type Phase =
   | { kind: 'confirm'; result: PunchResponse; userName: string };
 
 const IDLE_TIMEOUT_MS = 6000;
+// Time the user has on the name-reveal screen to tap a punch button before
+// auto-reset. Was 30s through 2026-04-29 — too short, ~5 employees lost
+// their lunch click that day because they got bounced to the PIN pad
+// mid-decision and tapped where the lunch button used to be (registering
+// as a stray PIN digit). Bumped to 90s + countdown indicator below 30s.
+const NAME_PHASE_TIMEOUT_MS = 90_000;
+const NAME_PHASE_WARN_AT_MS = 30_000;
+const CONFIRM_PHASE_TIMEOUT_MS = 6000;
 
 export default function Kiosk() {
   const nav = useNavigate();
@@ -81,15 +89,31 @@ export default function Kiosk() {
     setRegisterOpenForPin(null);
   }, []);
 
+  // Auto-reset countdown — tracks remaining ms so the UI can show a warning
+  // when the user is about to be bounced back to the PIN screen mid-decision.
+  const [nameCountdownMs, setNameCountdownMs] = useState<number | null>(null);
+
   useEffect(() => {
     if (phase.kind === 'confirm') {
-      const t = setTimeout(reset, IDLE_TIMEOUT_MS);
+      const t = setTimeout(reset, CONFIRM_PHASE_TIMEOUT_MS);
       return () => clearTimeout(t);
     }
     if (phase.kind === 'name') {
-      const t = setTimeout(reset, 30_000);
-      return () => clearTimeout(t);
+      const start = Date.now();
+      setNameCountdownMs(NAME_PHASE_TIMEOUT_MS);
+      const tick = setInterval(() => {
+        const remaining = NAME_PHASE_TIMEOUT_MS - (Date.now() - start);
+        setNameCountdownMs(remaining > 0 ? remaining : 0);
+      }, 1000);
+      const t = setTimeout(reset, NAME_PHASE_TIMEOUT_MS);
+      return () => {
+        clearTimeout(t);
+        clearInterval(tick);
+        setNameCountdownMs(null);
+      };
     }
+    setNameCountdownMs(null);
+    return undefined;
   }, [phase, reset]);
 
   async function handlePin(pin: string) {
@@ -140,29 +164,74 @@ export default function Kiosk() {
   }
 
   async function handlePunch(type: PunchType) {
-    if (phase.kind !== 'name') return;
-    if (!coords) {
-      setError('Location required — allow access and try again.');
-      setPhase({ kind: 'pin' });
+    // Click-instrumentation: log every tap so future silent failures are
+    // diagnosable. (Local console only; cheap, privacy-safe.)
+    // eslint-disable-next-line no-console
+    console.info('[kiosk] punch tap', {
+      type,
+      phase: phase.kind,
+      hasCoords: !!coords,
+      gpsState,
+      ts: new Date().toISOString(),
+    });
+
+    // 30s race: user tapped a button on the name screen exactly as the
+    // auto-reset fired. We caught it in React state — phase is no longer
+    // 'name' — but rather than silently swallow, surface clearly so
+    // they know to re-enter PIN and try again.
+    if (phase.kind !== 'name') {
+      setError('That session timed out — please re-enter your PIN.');
       return;
     }
+
     const { pin, lookup } = phase;
+
+    // GPS not yet ready — try ONE more time before failing the click.
+    // Previously we bounced straight to the PIN screen with a vague error;
+    // that swallowed legitimate clicks if GPS was mid-acquisition.
+    let punchCoords = coords;
+    if (!punchCoords) {
+      setPhase({ kind: 'punching', pin, type });
+      const r = await getCurrentPosition();
+      if (r.ok) {
+        punchCoords = r.coords;
+        setCoords(r.coords);
+        setGpsState('ready');
+      } else {
+        setError(
+          r.reason === 'denied'
+            ? 'Location access blocked — tap the lock icon in your address bar → allow location, then try again.'
+            : "Couldn't get your location — make sure WiFi is on and try again.",
+        );
+        setPhase({ kind: 'name', pin, lookup }); // stay on the buttons screen
+        return;
+      }
+    }
+
     setPhase({ kind: 'punching', pin, type });
     try {
       const result = await api<PunchResponse>('/kiosk/punch', {
         method: 'POST',
-        body: { pin, type, lat: coords.lat, lng: coords.lng },
+        body: { pin, type, lat: punchCoords.lat, lng: punchCoords.lng },
       });
+      // eslint-disable-next-line no-console
+      console.info('[kiosk] punch ok', { id: result.punch.id, type: result.punch.type });
       setPhase({ kind: 'confirm', result, userName: lookup.user.name });
     } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[kiosk] punch failed', e);
       const msg =
         e instanceof ApiError
           ? e.status === 403
             ? "You're not at a Glisten office — try once you're inside."
-            : e.message
-          : 'Punch failed.';
+            : e.status === 409
+              ? "Looks like you already did that. Take a look at the screen and try the other button."
+              : e.message
+          : 'Punch failed — please try again.';
       setError(msg);
-      setPhase({ kind: 'pin' });
+      // Stay on the buttons screen so they can retry. Was: bounce to PIN,
+      // which lost the session and let users tap the wrong place next.
+      setPhase({ kind: 'name', pin, lookup });
     }
   }
 
@@ -261,6 +330,11 @@ export default function Kiosk() {
                   onCancel={reset}
                   onMissedPunch={() => setMissedOpen(true)}
                   geofenceWarning={phase.lookup.location === null}
+                  countdownMs={
+                    nameCountdownMs !== null && nameCountdownMs <= NAME_PHASE_WARN_AT_MS
+                      ? nameCountdownMs
+                      : null
+                  }
                 />
               </motion.div>
             ) : phase.kind === 'punching' ? (
