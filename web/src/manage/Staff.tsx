@@ -5,6 +5,7 @@ import { api, ApiError } from '../shared/api';
 import { useAuth } from './auth';
 import { ListSkeleton } from './Skeleton';
 import { useToast } from '../shared/toast';
+import BlurredRate from './BlurredRate';
 
 type StaffRow = {
   id: number;
@@ -94,9 +95,9 @@ export default function Staff() {
               </div>
               <div className="flex flex-col items-end gap-1 text-right">
                 {r.pay_rate_cents !== null ? (
-                  <span className="text-creamSoft text-sm tabular-nums tracking-tight">
-                    ${(r.pay_rate_cents / 100).toFixed(2)}
-                    <span className="text-creamSoft/40 text-xs ml-1">/hr</span>
+                  <span className="text-creamSoft text-sm tracking-tight inline-flex items-baseline gap-1">
+                    <BlurredRate cents={r.pay_rate_cents} />
+                    <span className="text-creamSoft/40 text-xs">/hr</span>
                   </span>
                 ) : !r.is_owner && (
                   <span className="text-creamSoft/40 text-xs italic">salary / commission</span>

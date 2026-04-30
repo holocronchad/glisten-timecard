@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { LogIn, LogOut, Coffee, Utensils } from 'lucide-react';
+import { LogIn, LogOut } from 'lucide-react';
 import { CprState, PunchType } from '../shared/api';
 import CprPanel from './CprPanel';
 
@@ -17,11 +17,15 @@ type Props = {
   geofenceWarning?: boolean;
 };
 
+// Lunch removed 2026-04-29 per Dr. Dawood. Defensive: server's
+// nextAllowedPunches no longer returns lunch_start / lunch_end either, so
+// these branches won't render — kept for type-completeness if a stale
+// frontend ever sees a stale payload.
 const META: Record<PunchType, { label: string; sub: string; icon: any }> = {
   clock_in: { label: 'Clock in', sub: 'Start your day', icon: LogIn },
   clock_out: { label: 'Clock out', sub: 'End your day', icon: LogOut },
-  lunch_start: { label: 'Start lunch', sub: 'Take a break', icon: Coffee },
-  lunch_end: { label: 'End lunch', sub: 'Back to work', icon: Utensils },
+  lunch_start: { label: 'Clock out', sub: 'End your day', icon: LogOut },
+  lunch_end: { label: 'Clock out', sub: 'End your day', icon: LogOut },
 };
 
 export default function NameReveal({

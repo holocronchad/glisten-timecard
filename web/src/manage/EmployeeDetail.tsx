@@ -7,6 +7,7 @@ import { useAuth } from './auth';
 import { formatTime } from '../shared/geo';
 import { buildSegments, totalsByDay, totalMinutes, type PunchType } from '../shared/hours';
 import EditPunchModal from './EditPunchModal';
+import BlurredRate from './BlurredRate';
 
 type EmployeeDetailResponse = {
   user: {
@@ -109,8 +110,8 @@ export default function EmployeeDetail() {
           <p className="text-creamSoft/40 text-sm mt-1">
             {data.user.role} · {data.user.employment_type}
             {data.user.pay_rate_cents !== null && (
-              <span className="text-creamSoft/70 ml-2">
-                · ${(data.user.pay_rate_cents / 100).toFixed(2)}/hr
+              <span className="text-creamSoft/70 ml-2 inline-flex items-baseline gap-1">
+                · <BlurredRate cents={data.user.pay_rate_cents} />/hr
               </span>
             )}
             {!data.user.active && (
