@@ -11,12 +11,15 @@ export interface ManagerJwtPayload {
 }
 
 export function signManagerToken(payload: Omit<ManagerJwtPayload, 'iat' | 'exp'>): string {
-  return jwt.sign(payload, config.jwtSecret, { expiresIn: `${config.jwtTtlHours}h` });
+  return jwt.sign(payload, config.jwtSecret, {
+    algorithm: 'HS256',
+    expiresIn: `${config.jwtTtlHours}h`,
+  });
 }
 
 export function verifyManagerToken(token: string): ManagerJwtPayload | null {
   try {
-    return jwt.verify(token, config.jwtSecret) as ManagerJwtPayload;
+    return jwt.verify(token, config.jwtSecret, { algorithms: ['HS256'] }) as ManagerJwtPayload;
   } catch {
     return null;
   }

@@ -6,7 +6,7 @@
 import cron from 'node-cron';
 import { config } from '../config';
 import { query, withTransaction } from '../db';
-import { recordPunch } from '../services/punches';
+import { getLatestPunch, recordPunch } from '../services/punches';
 
 interface OpenRow {
   user_id: number;
@@ -17,12 +17,17 @@ interface OpenRow {
 }
 
 export async function runAutoClose(now: Date = new Date()): Promise<{ closed: number }> {
-  // Find each user's latest punch — close if it's clock_in or lunch_start.
+  // Find each user's latest punch within the lookback window — close if it's
+  // clock_in or lunch_start. The 36-hour bound matches the lunch-attestation
+  // lookback and prevents the cron from re-flagging stale opens (e.g. a 3-week
+  // old lunch_start a user never closed) every single night.
   const { rows } = await query<OpenRow>(
     `SELECT DISTINCT ON (user_id)
        user_id, location_id, type, ts, id AS punch_id
      FROM timeclock.punches
+     WHERE ts >= $1
      ORDER BY user_id, ts DESC`,
+    [new Date(now.getTime() - 36 * 60 * 60 * 1000)],
   );
 
   const open = rows.filter((r) => r.type === 'clock_in' || r.type === 'lunch_start');
@@ -37,10 +42,29 @@ export async function runAutoClose(now: Date = new Date()): Promise<{ closed: nu
     const closeType: 'clock_out' | 'lunch_end' =
       o.type === 'clock_in' ? 'clock_out' : 'lunch_end';
 
-    await withTransaction(async (client) => {
+    const wrote = await withTransaction<boolean>(async (client) => {
+      // Take the same per-user advisory lock the kiosk punch handler uses,
+      // and re-verify the user is still open INSIDE the lock. Between the
+      // initial latest-per-user scan above and now, the employee may have
+      // walked to the kiosk and clocked out themselves. Without this
+      // recheck, the cron would write a duplicate auto_close clock_out
+      // alongside the legitimate kiosk clock_out.
+      await client.query('SELECT pg_advisory_xact_lock($1)', [o.user_id]);
+
+      const latest = await getLatestPunch(o.user_id, client);
+      if (
+        !latest ||
+        (latest.type !== 'clock_in' && latest.type !== 'lunch_start')
+      ) {
+        // User already closed via kiosk between the row scan and now —
+        // skip. Common when the cron fires at 6:59 AM and the early
+        // arrivals are punching in while we're walking the open list.
+        return false;
+      }
+
       const inserted = await recordPunch({
         userId: o.user_id,
-        locationId: o.location_id,
+        locationId: latest.location_id,
         type: closeType,
         source: 'auto_close',
         ts,
@@ -55,18 +79,19 @@ export async function runAutoClose(now: Date = new Date()): Promise<{ closed: nu
          VALUES (NULL, 'punch', $1, 'auto_close', $2, $3, $4)`,
         [
           inserted.id,
-          JSON.stringify({ open_punch_id: o.punch_id, open_type: o.type, open_ts: start }),
+          JSON.stringify({ open_punch_id: latest.id, open_type: latest.type, open_ts: latest.ts }),
           JSON.stringify({
             inserted_punch_id: inserted.id,
             type: closeType,
             ts,
             source: 'auto_close',
           }),
-          `Auto-closed ${o.type} from ${start.toISOString()} — manager review required`,
+          `Auto-closed ${latest.type} from ${new Date(latest.ts).toISOString()} — manager review required`,
         ],
       );
+      return true;
     });
-    closed += 1;
+    if (wrote) closed += 1;
   }
 
   return { closed };

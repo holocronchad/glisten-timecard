@@ -5,7 +5,6 @@
 // row (not the IP / kiosk) so a single attacker can't lock out everyone.
 
 import bcrypt from 'bcrypt';
-import { config } from '../config';
 import { query } from '../db';
 
 export interface UserRow {
@@ -25,6 +24,10 @@ export interface UserRow {
   pin_locked_until: Date | null;
   pin_fail_count: number;
   pin_fail_window_start: Date | null;
+  // null when the user has a single rate; non-null marks a dual-rate user
+  // (separate WFH rate). Read by the kiosk to flag every primary-PIN punch
+  // for manager review (rate-arbitrage safeguard).
+  pay_rate_cents_remote: number | null;
 }
 
 export type PinResult =
@@ -50,7 +53,8 @@ export async function findUserByPin(pin: string): Promise<PinResult> {
     `SELECT id, name, pin_hash, pin_hash_remote,
             is_owner, is_manager, track_hours, active, approved,
             cpr_org, cpr_issued_at, cpr_expires_at, cpr_updated_at,
-            pin_locked_until, pin_fail_count, pin_fail_window_start
+            pin_locked_until, pin_fail_count, pin_fail_window_start,
+            pay_rate_cents_remote
      FROM timeclock.users
      WHERE active = true
        AND (pin_hash IS NOT NULL OR pin_hash_remote IS NOT NULL)`
@@ -59,14 +63,27 @@ export async function findUserByPin(pin: string): Promise<PinResult> {
   // Find the user(s) whose pin_hash OR pin_hash_remote matches. bcrypt
   // comparison is constant-time. usedRemotePin distinguishes which PIN
   // matched so /kiosk/punch can decide whether to skip the geofence check.
-  const matches: { user: UserRow; usedRemotePin: boolean }[] = [];
+  // Run all bcrypt compares in parallel (libuv threadpool, default size 4)
+  // so a 21-user roster takes ~10x bcrypt cost wall-clock instead of ~42x.
+  type Match = { user: UserRow; usedRemotePin: boolean };
+  const checks: Promise<Match | null>[] = [];
   for (const u of rows) {
-    if (u.pin_hash && (await bcrypt.compare(pin, u.pin_hash))) {
-      matches.push({ user: u, usedRemotePin: false });
-    } else if (u.pin_hash_remote && (await bcrypt.compare(pin, u.pin_hash_remote))) {
-      matches.push({ user: u, usedRemotePin: true });
+    if (u.pin_hash) {
+      checks.push(
+        bcrypt.compare(pin, u.pin_hash).then((ok) =>
+          ok ? { user: u, usedRemotePin: false } : null,
+        ),
+      );
+    }
+    if (u.pin_hash_remote) {
+      checks.push(
+        bcrypt.compare(pin, u.pin_hash_remote).then((ok) =>
+          ok ? { user: u, usedRemotePin: true } : null,
+        ),
+      );
     }
   }
+  const matches = (await Promise.all(checks)).filter((m): m is Match => m !== null);
 
   if (matches.length === 0) {
     return { ok: false, reason: 'no_match' };
@@ -94,46 +111,6 @@ export async function findUserByPin(pin: string): Promise<PinResult> {
   }
 
   return { ok: true, user, usedRemotePin };
-}
-
-/**
- * Record a failed PIN attempt. We can't tie it to a user (we don't know who),
- * so we throttle in a separate table OR simply rely on a global rate-limiter
- * at the route level. For MVP we trust the route-level limiter.
- *
- * If you want per-user lockout, call this with a known user_id when a wrong
- * PIN is supplied for THAT user (e.g., during a "change PIN" flow). For the
- * generic kiosk lookup above, no user is known on failure.
- */
-export async function recordPinFailureForUser(userId: number): Promise<void> {
-  const window = await query<{ pin_fail_window_start: Date | null; pin_fail_count: number }>(
-    `SELECT pin_fail_window_start, pin_fail_count FROM timeclock.users WHERE id = $1`,
-    [userId]
-  );
-  const row = window.rows[0];
-  if (!row) return;
-  const now = new Date();
-  const windowAge = row.pin_fail_window_start
-    ? (now.getTime() - row.pin_fail_window_start.getTime()) / 1000
-    : Infinity;
-  let nextCount = row.pin_fail_count + 1;
-  let nextWindowStart: Date = row.pin_fail_window_start ?? now;
-  if (windowAge > 60) {
-    nextCount = 1;
-    nextWindowStart = now;
-  }
-  let lockedUntil: Date | null = null;
-  if (nextCount >= config.pinLockoutAfterFails) {
-    lockedUntil = new Date(now.getTime() + config.pinLockoutDurationMinutes * 60_000);
-  }
-  await query(
-    `UPDATE timeclock.users
-     SET pin_fail_count = $1,
-         pin_fail_window_start = $2,
-         pin_locked_until = COALESCE($3, pin_locked_until)
-     WHERE id = $4`,
-    [nextCount, nextWindowStart, lockedUntil, userId]
-  );
 }
 
 export async function hashPin(pin: string): Promise<string> {

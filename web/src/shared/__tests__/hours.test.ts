@@ -1,8 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { buildSegments, totalsByDay, totalMinutes, type PunchLite } from '../hours';
+import {
+  buildSegments,
+  totalsByDay,
+  totalMinutes,
+  splitMinutes,
+  type PunchLite,
+} from '../hours';
 
-function p(id: number, type: PunchLite['type'], iso: string): PunchLite {
-  return { id, type, ts: iso };
+function p(
+  id: number,
+  type: PunchLite['type'],
+  iso: string,
+  location_id: number | null = 1,
+): PunchLite {
+  return { id, type, ts: iso, location_id };
 }
 
 describe('web shared/hours', () => {
@@ -44,6 +55,18 @@ describe('web shared/hours', () => {
     expect(totals).toEqual([
       { date: '2026-04-27', worked_minutes: 480, open: false },
     ]);
+  });
+
+  it('splitMinutes buckets office vs WFH by opening-punch location_id', () => {
+    const segs = buildSegments([
+      // Office shift Mon: 6h
+      p(1, 'clock_in', '2026-04-27T15:00:00Z', 1),
+      p(2, 'clock_out', '2026-04-27T21:00:00Z', 1),
+      // WFH shift Tue: 4h (clock_in carries the null)
+      p(3, 'clock_in', '2026-04-28T15:00:00Z', null),
+      p(4, 'clock_out', '2026-04-28T19:00:00Z', null),
+    ]);
+    expect(splitMinutes(segs)).toEqual({ office: 360, wfh: 240 });
   });
 
   it('handles a shift that spans into the next AZ calendar day', () => {

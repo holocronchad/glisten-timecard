@@ -21,20 +21,74 @@ export class ApiError extends Error {
   }
 }
 
+// Distinct from ApiError: the server never answered, or answered with
+// garbage (HTML 502 page, dropped JSON). Surfaced separately so callers
+// can render a "network blip" message instead of the catch-all
+// "Connection failed." that swallowed Ashley's intermittent reports.
+export class NetworkError extends Error {
+  kind: 'offline' | 'fetch_failed' | 'bad_response';
+  cause?: unknown;
+  constructor(kind: NetworkError['kind'], message: string, cause?: unknown) {
+    super(message);
+    this.kind = kind;
+    this.cause = cause;
+  }
+}
+
 export const AUTH_EXPIRED_EVENT = 'glisten:auth-expired';
 
 export async function api<T>(path: string, opts: FetchOpts = {}): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: opts.method ?? 'GET',
-    headers: {
-      'content-type': 'application/json',
-      ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}),
-    },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method: opts.method ?? 'GET',
+      headers: {
+        'content-type': 'application/json',
+        ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}),
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch (e) {
+    const offline =
+      typeof navigator !== 'undefined' && navigator.onLine === false;
+    // eslint-disable-next-line no-console
+    console.warn('[api] fetch threw', { path, offline, err: e });
+    if (offline) {
+      throw new NetworkError(
+        'offline',
+        "You're offline — check WiFi and try again.",
+        e,
+      );
+    }
+    throw new NetworkError(
+      'fetch_failed',
+      "Couldn't reach the timecard server — try again in a moment.",
+      e,
+    );
+  }
 
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  let data: any = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      // Server returned non-JSON (nginx 502 HTML, Cloudflare error page,
+      // truncated response). Don't show "Connection failed." — show the
+      // HTTP status so we can tell what actually happened.
+      // eslint-disable-next-line no-console
+      console.warn('[api] non-JSON response', {
+        path,
+        status: res.status,
+        bodyHead: text.slice(0, 120),
+      });
+      throw new NetworkError(
+        'bad_response',
+        `Server hiccup (${res.status}) — try once more.`,
+        e,
+      );
+    }
+  }
 
   if (!res.ok) {
     const msg = (data && (data.message || data.error)) || res.statusText;

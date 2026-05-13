@@ -18,12 +18,16 @@ type EmployeeDetailResponse = {
     role: string;
     employment_type: 'W2' | '1099';
     pay_rate_cents: number | null;
+    // WFH rate — paid when this employee punches with the WFH PIN.
+    // Null when no separate rate is set (single-rate user).
+    pay_rate_cents_remote: number | null;
     is_owner: boolean;
     is_manager: boolean;
     track_hours: boolean;
     active: boolean;
   };
-  period: { index: number; start: string; end: string; label: string };
+  // index = null when this is a custom range (not a known pay period)
+  period: { index: number | null; start: string; end: string; label: string };
   punches: Array<{
     id: number;
     location_id: number | null;
@@ -45,6 +49,20 @@ type EmployeeDetailResponse = {
     created_at: string;
     decided_at: string | null;
   }>;
+  // Server-computed split for dual-rate employees (Filza). Always present;
+  // for single-rate users, has_split_rate is false and the WFH columns
+  // collapse to zero. Render the breakdown card only when has_split_rate is true.
+  rate_summary: {
+    has_split_rate: boolean;
+    office_minutes: number;
+    wfh_minutes: number;
+    total_minutes: number;
+    office_rate_cents: number;
+    wfh_rate_cents: number;
+    office_pay_cents: number;
+    wfh_pay_cents: number;
+    total_pay_cents: number;
+  };
 };
 
 
@@ -57,10 +75,20 @@ export default function EmployeeDetail() {
   const [editing, setEditing] = useState<EmployeeDetailResponse['punches'][number] | null>(null);
 
   const idxParam = params.get('index');
+  const fromParam = params.get('from');
+  const toParam = params.get('to');
+  const isCustomRange = Boolean(fromParam && toParam);
 
   async function load() {
-    const path = idxParam
-      ? `/manage/employees/${id}?index=${idxParam}`
+    const sp = new URLSearchParams();
+    if (isCustomRange) {
+      sp.set('from', fromParam!);
+      sp.set('to', toParam!);
+    } else if (idxParam) {
+      sp.set('index', idxParam);
+    }
+    const path = sp.toString()
+      ? `/manage/employees/${id}?${sp.toString()}`
       : `/manage/employees/${id}`;
     const r = await api<EmployeeDetailResponse>(path, {
       token: token ?? undefined,
@@ -71,7 +99,7 @@ export default function EmployeeDetail() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, idxParam, token]);
+  }, [id, idxParam, fromParam, toParam, token]);
 
   // Refresh on global "punches updated" broadcast (AddHoursModal +
   // EditPunchModal both fire it). Lets Dr. Dawood see her changes
@@ -90,8 +118,17 @@ export default function EmployeeDetail() {
   }, [id, idxParam, token]);
 
   function shiftPeriod(delta: number) {
-    if (!data) return;
+    if (!data || data.period.index === null) return;
     setParams({ index: String(data.period.index + delta) });
+  }
+
+  function applyCustomRange(from: string, to: string) {
+    if (!from || !to) return;
+    setParams({ from, to });
+  }
+
+  function clearCustomRange() {
+    setParams({});
   }
 
   if (!data) {
@@ -99,8 +136,17 @@ export default function EmployeeDetail() {
   }
 
   const segments = buildSegments(data.punches);
-  const dailyTotals = totalsByDay(segments);
+  const workedDays = totalsByDay(segments);
   const total = totalMinutes(segments);
+  // Pad to every day in the pay period so off-days render as zero rows.
+  // Dr. Dawood does payroll review per-day — she wants a clean ~14-row
+  // breakdown, not just the days the employee happened to work.
+  const fullPeriodDays = enumerateDays(data.period.start, data.period.end);
+  const dailyMap = new Map(workedDays.map((d) => [d.date, d]));
+  const dailyTotals = fullPeriodDays.map(
+    (date) =>
+      dailyMap.get(date) ?? { date, worked_minutes: 0, open: false },
+  );
 
   return (
     <div>
@@ -124,6 +170,14 @@ export default function EmployeeDetail() {
             {data.user.pay_rate_cents !== null && (
               <span className="text-creamSoft/70 ml-2 inline-flex items-baseline gap-1">
                 · <BlurredRate cents={data.user.pay_rate_cents} />/hr
+                {data.user.pay_rate_cents_remote !== null && (
+                  <span
+                    className="ml-2 text-[10px] tracking-[0.12em] uppercase rounded-full px-2 py-0.5 bg-sky-300/10 text-sky-300 border border-sky-300/30 inline-flex items-baseline gap-1"
+                    title="WFH rate (paid when punching with WFH PIN)"
+                  >
+                    WFH&nbsp;<BlurredRate cents={data.user.pay_rate_cents_remote} />/hr
+                  </span>
+                )}
               </span>
             )}
             {!data.user.active && (
@@ -131,24 +185,40 @@ export default function EmployeeDetail() {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => shiftPeriod(-1)}
-            className="h-10 w-10 rounded-full border border-creamSoft/15 hover:bg-creamSoft/5 flex items-center justify-center"
-          >
-            <ChevronLeft size={18} />
-          </button>
-          <span className="text-creamSoft/60 text-sm tabular-nums px-2">
-            {data.period.label}
-          </span>
-          <button
-            onClick={() => shiftPeriod(1)}
-            className="h-10 w-10 rounded-full border border-creamSoft/15 hover:bg-creamSoft/5 flex items-center justify-center"
-          >
-            <ChevronRight size={18} />
-          </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {!isCustomRange ? (
+            <>
+              <button
+                onClick={() => shiftPeriod(-1)}
+                className="h-10 w-10 rounded-full border border-creamSoft/15 hover:bg-creamSoft/5 flex items-center justify-center"
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <span className="text-creamSoft/60 text-sm tabular-nums px-2">
+                {data.period.label}
+              </span>
+              <button
+                onClick={() => shiftPeriod(1)}
+                className="h-10 w-10 rounded-full border border-creamSoft/15 hover:bg-creamSoft/5 flex items-center justify-center"
+              >
+                <ChevronRight size={18} />
+              </button>
+            </>
+          ) : (
+            <span className="text-creamSoft/60 text-sm tabular-nums px-2">
+              Custom range
+            </span>
+          )}
         </div>
       </div>
+
+      <DateRangeBar
+        isCustom={isCustomRange}
+        currentFrom={fromParam ?? data.period.start.slice(0, 10)}
+        currentTo={toParam ?? data.period.end.slice(0, 10)}
+        onApply={applyCustomRange}
+        onClear={clearCustomRange}
+      />
 
       <div className="mt-8 grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Stat label="Period total" value={hhmm(total)} />
@@ -165,21 +235,96 @@ export default function EmployeeDetail() {
         />
       </div>
 
+      {/* Dual-rate breakdown — only renders for employees with separate WFH rate.
+          Built 2026-05-04 to give Dr. Dawood the at-a-glance answer for Filza
+          (and any future dual-rate staff): office hrs × $X + WFH hrs × $Y = total. */}
+      {data.rate_summary.has_split_rate && (
+        <div className="mt-6 rounded-3xl border border-creamSoft/15 bg-gradient-to-br from-graphite/60 to-graphite/30 p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-creamSoft/40 text-[10px] tracking-[0.18em] uppercase">
+              Pay breakdown — this period
+            </span>
+            <span className="text-creamSoft/30 text-xs">·</span>
+            <span className="text-creamSoft/50 text-xs tabular-nums">
+              {data.period.label}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Office bucket */}
+            <div className="rounded-2xl border border-creamSoft/10 bg-graphite/40 p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="rounded-full px-2 py-0.5 bg-cream/10 text-creamSoft border border-creamSoft/20 text-[10px] tracking-[0.12em] uppercase">
+                  Office
+                </span>
+                <span className="text-creamSoft/40 text-xs">
+                  in-office PIN
+                </span>
+              </div>
+              <div className="text-creamSoft text-2xl tracking-tight tabular-nums font-light">
+                {hhmm(data.rate_summary.office_minutes)}
+              </div>
+              <div className="text-creamSoft/50 text-xs mt-1 tabular-nums inline-flex items-baseline gap-1">
+                ×&nbsp;<BlurredRate cents={data.rate_summary.office_rate_cents} />/hr
+              </div>
+              <div className="text-cream text-lg tracking-tight mt-2 tabular-nums">
+                <BlurredRate cents={data.rate_summary.office_pay_cents} className="text-base" />
+              </div>
+            </div>
+
+            {/* WFH bucket */}
+            <div className="rounded-2xl border border-sky-300/20 bg-sky-300/5 p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="rounded-full px-2 py-0.5 bg-sky-300/15 text-sky-300 border border-sky-300/30 text-[10px] tracking-[0.12em] uppercase">
+                  WFH
+                </span>
+                <span className="text-creamSoft/40 text-xs">
+                  remote PIN
+                </span>
+              </div>
+              <div className="text-creamSoft text-2xl tracking-tight tabular-nums font-light">
+                {hhmm(data.rate_summary.wfh_minutes)}
+              </div>
+              <div className="text-creamSoft/50 text-xs mt-1 tabular-nums inline-flex items-baseline gap-1">
+                ×&nbsp;<BlurredRate cents={data.rate_summary.wfh_rate_cents} />/hr
+              </div>
+              <div className="text-cream text-lg tracking-tight mt-2 tabular-nums">
+                <BlurredRate cents={data.rate_summary.wfh_pay_cents} className="text-base" />
+              </div>
+            </div>
+
+            {/* Total */}
+            <div className="rounded-2xl border border-creamSoft/25 bg-creamSoft/5 p-4 flex flex-col justify-between">
+              <div className="text-creamSoft/40 text-[10px] tracking-[0.18em] uppercase mb-2">
+                Total this period
+              </div>
+              <div>
+                <div className="text-creamSoft text-2xl tracking-tight tabular-nums font-light">
+                  {hhmm(data.rate_summary.total_minutes)}
+                </div>
+                <div className="text-cream text-2xl tracking-tight mt-2 tabular-nums font-medium">
+                  <BlurredRate cents={data.rate_summary.total_pay_cents} className="text-base font-medium" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <h2 className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
-        Daily timeline
+        Daily breakdown
       </h2>
       <div className="rounded-3xl border border-creamSoft/10 bg-graphite/40 p-5">
-        {dailyTotals.length === 0 ? (
-          <div className="text-creamSoft/40 text-sm">
-            No worked hours in this period.
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {dailyTotals.map((d) => (
-              <DayRow key={d.date} date={d.date} segments={segments} />
-            ))}
-          </div>
-        )}
+        <div className="flex flex-col gap-2">
+          {dailyTotals.map((d) => (
+            <DayRow
+              key={d.date}
+              date={d.date}
+              minutes={d.worked_minutes}
+              segments={segments}
+            />
+          ))}
+        </div>
       </div>
 
       <h2 className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
@@ -217,7 +362,16 @@ export default function EmployeeDetail() {
                     {PUNCH_LABEL[p.type]}
                   </td>
                   <td className="px-5 py-3 text-creamSoft/60 hidden sm:table-cell">
-                    {p.location_name ?? '—'}
+                    {p.location_id == null ? (
+                      // WFH PIN punch — location_id is null by design (no
+                      // geofence binding). Surface as a badge so managers
+                      // see at a glance which rate this punch maps to.
+                      <span className="inline-flex items-center rounded-full px-2 py-0.5 bg-sky-300/10 text-sky-300 border border-sky-300/30 text-[10px] tracking-[0.12em] uppercase">
+                        WFH
+                      </span>
+                    ) : (
+                      p.location_name ?? '—'
+                    )}
                   </td>
                   <td className="px-5 py-3 text-creamSoft/40 hidden md:table-cell">
                     {p.source}
@@ -311,9 +465,11 @@ export default function EmployeeDetail() {
 
 function DayRow({
   date,
+  minutes,
   segments,
 }: {
   date: string;
+  minutes: number;
   segments: ReturnType<typeof buildSegments>;
 }) {
   const [y, m, d] = date.split('-').map(Number);
@@ -331,28 +487,44 @@ function DayRow({
     (s) => s.start.getTime() < dayEnd && s.end.getTime() > dayStart,
   );
 
-  const minutesWorked = todaySegs
-    .filter((s) => s.paid)
-    .reduce(
-      (acc, s) => acc + Math.max(0, (s.end.getTime() - s.start.getTime()) / 60_000),
-      0,
-    );
-
   const dateObj = new Date(Date.UTC(y, m - 1, d, 12));
-  const label = dateObj.toLocaleDateString('en-US', {
+  const weekday = dateObj.toLocaleDateString('en-US', {
     weekday: 'short',
+    timeZone: 'America/Phoenix',
+  });
+  const monthDay = dateObj.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     timeZone: 'America/Phoenix',
   });
+  const isWeekend = weekday === 'Sat' || weekday === 'Sun';
+  const off = minutes === 0;
 
   return (
-    <div className="flex items-center gap-4">
-      <div className="w-32 shrink-0">
-        <div className="text-creamSoft text-sm tracking-tight">{label}</div>
-        <div className="text-creamSoft/40 text-xs tabular-nums">
-          {hhmm(Math.round(minutesWorked))}
+    <div
+      className={[
+        'flex items-center gap-4 py-2 px-3 rounded-2xl',
+        off ? 'opacity-50' : '',
+        isWeekend && off ? 'bg-ink/30' : '',
+      ].join(' ')}
+    >
+      <div className="w-36 shrink-0">
+        <div className="text-creamSoft/60 text-[10px] tracking-[0.18em] uppercase">
+          {weekday}
         </div>
+        <div className="text-creamSoft text-sm tracking-tight">{monthDay}</div>
+      </div>
+
+      <div className="w-24 shrink-0 text-right">
+        {off ? (
+          <span className="text-creamSoft/30 text-sm tracking-[0.1em] uppercase">
+            Off
+          </span>
+        ) : (
+          <span className="text-cream text-lg tabular-nums tracking-tight font-medium">
+            {hhmm(Math.round(minutes))}
+          </span>
+        )}
       </div>
 
       <div className="relative flex-1 h-8 bg-ink/60 rounded-full overflow-hidden">
@@ -392,12 +564,37 @@ function DayRow({
         })}
       </div>
 
-      <div className="hidden sm:flex w-32 justify-end gap-2 text-[10px] text-creamSoft/30 tabular-nums">
+      <div className="hidden sm:flex w-20 justify-end gap-2 text-[10px] text-creamSoft/30 tabular-nums">
         <span>6a</span>
         <span>10p</span>
       </div>
     </div>
   );
+}
+
+// Enumerate every YYYY-MM-DD between [startIso, endIso) anchored to AZ.
+// Used to pad the daily breakdown so off-days render as zero rows.
+function enumerateDays(startIso: string, endIso: string): string[] {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  const days: string[] = [];
+  // Walk in 24h steps, format in AZ each time. AZ is fixed UTC-7 (no DST).
+  const cursor = new Date(start.getTime());
+  while (cursor.getTime() < end.getTime()) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Phoenix',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(cursor);
+    const y = parts.find((p) => p.type === 'year')!.value;
+    const m = parts.find((p) => p.type === 'month')!.value;
+    const d = parts.find((p) => p.type === 'day')!.value;
+    days.push(`${y}-${m}-${d}`);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  // Dedupe in case the period boundary lands oddly.
+  return Array.from(new Set(days));
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
@@ -426,4 +623,73 @@ function dateLabel(iso: string): string {
     day: 'numeric',
     timeZone: 'America/Phoenix',
   });
+}
+
+// Custom date range bar — appears under the period nav. When in custom mode
+// the From/To inputs are pre-filled with the current range; "Clear" returns
+// to pay-period-by-index navigation.
+function DateRangeBar({
+  isCustom,
+  currentFrom,
+  currentTo,
+  onApply,
+  onClear,
+}: {
+  isCustom: boolean;
+  currentFrom: string;
+  currentTo: string;
+  onApply: (from: string, to: string) => void;
+  onClear: () => void;
+}) {
+  const [from, setFrom] = useState(currentFrom);
+  const [to, setTo] = useState(currentTo);
+  // Sync if props change (e.g. user navigated periods then opened picker again)
+  useEffect(() => {
+    setFrom(currentFrom);
+    setTo(currentTo);
+  }, [currentFrom, currentTo]);
+
+  const dirty = from !== currentFrom || to !== currentTo;
+
+  return (
+    <div className="mt-6 flex items-end gap-3 flex-wrap">
+      <label className="flex flex-col gap-1.5">
+        <span className="text-creamSoft/40 text-[10px] tracking-[0.2em] uppercase">
+          From
+        </span>
+        <input
+          type="date"
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+          className="bg-graphite border border-creamSoft/15 rounded-full px-4 py-2 text-sm text-creamSoft tabular-nums focus:outline-none focus:border-cream/40 transition-colors"
+        />
+      </label>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-creamSoft/40 text-[10px] tracking-[0.2em] uppercase">
+          To
+        </span>
+        <input
+          type="date"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          className="bg-graphite border border-creamSoft/15 rounded-full px-4 py-2 text-sm text-creamSoft tabular-nums focus:outline-none focus:border-cream/40 transition-colors"
+        />
+      </label>
+      <button
+        onClick={() => onApply(from, to)}
+        disabled={!dirty || !from || !to || from > to}
+        className="h-10 rounded-full bg-cream text-ink px-4 text-sm tracking-tight disabled:opacity-40"
+      >
+        Apply range
+      </button>
+      {isCustom && (
+        <button
+          onClick={onClear}
+          className="h-10 rounded-full border border-creamSoft/15 hover:bg-creamSoft/5 text-creamSoft/80 px-4 text-sm tracking-tight"
+        >
+          Back to pay period
+        </button>
+      )}
+    </div>
+  );
 }

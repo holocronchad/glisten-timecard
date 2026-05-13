@@ -31,8 +31,18 @@ type StaffRow = {
   is_owner: boolean;
   track_hours: boolean;
   role?: string;
+  // From /manage/employees (added 2026-05-04). When defined, the modal can
+  // default the rate-bucket picker to the employee's home office and show
+  // a "WFH / remote" option only for dual-rate staff.
+  home_location_id?: number | null;
+  has_remote_rate?: boolean;
 };
 type Loc = { id: number; name: string; active: boolean };
+
+// Sentinel for the rate-bucket picker meaning "WFH / remote" — i.e., the
+// inserted punches will land with location_id = null and pay at the
+// employee's WFH rate. Numeric values are real location ids.
+const WFH_BUCKET = -1;
 
 type Props = { onClose: () => void; onSaved: () => void };
 
@@ -65,6 +75,8 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
   const [whenLunchEnd, setWhenLunchEnd] = useState(initialNow);
   const [whenOut, setWhenOut] = useState(initialNow);
 
+  // Either a real location_id, WFH_BUCKET (= null on the wire), or null
+  // (= "not yet picked"). Defaults to the selected employee's home office.
   const [locationId, setLocationId] = useState<number | null>(null);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -100,7 +112,9 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
         if (!cancelled) {
           const active = r.locations.filter((l) => l.active);
           setLocations(active);
-          if (active.length > 0) setLocationId(active[0].id);
+          // Don't pick a default here — we wait for the employee selection
+          // to default to THEIR home location (avoids defaulting Mesa staff
+          // to Gilbert just because Gilbert sorts first).
         }
       } catch {
         /* locations endpoint optional */
@@ -110,6 +124,26 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
       cancelled = true;
     };
   }, [token]);
+
+  // Default the rate-bucket picker to the SELECTED employee's home office.
+  // Without this, Mesa staff would silently inherit whatever location_id was
+  // last picked (or the first location in the list), creating wrong-rate
+  // and wrong-office bookkeeping. Reset to home_location_id on every userId
+  // change. Manager can override (especially needed for the rare "WFH /
+  // remote" case for dual-rate staff).
+  useEffect(() => {
+    if (userId == null || !staff) return;
+    const employee = staff.find((s) => s.id === userId);
+    if (!employee) return;
+    if (typeof employee.home_location_id === 'number') {
+      setLocationId(employee.home_location_id);
+    } else {
+      // No home set (e.g., owner / test user) — leave the picker on first
+      // active location as a soft default.
+      setLocationId(locations[0]?.id ?? null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, staff, locations]);
 
   // Each row: (active?, type, datetime-string).
   function plannedPunches() {
@@ -159,6 +193,8 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
       // each insert separately; manager edits bypass the kiosk state
       // machine so order doesn't strictly matter, but we do it for any
       // future reader of history.
+      // WFH_BUCKET sentinel maps to wire-level null (= remote / WFH rate).
+      const wireLocationId = locationId === WFH_BUCKET ? null : locationId;
       for (const p of planned) {
         await api('/manage/punches', {
           method: 'POST',
@@ -167,7 +203,7 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
             user_id: userId,
             type: p.type,
             ts: localAzToIso(p.when),
-            location_id: locationId,
+            location_id: wireLocationId,
             reason: reason.trim(),
           },
         });
@@ -409,10 +445,14 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
             )}
           </div>
 
-          {locations.length > 1 && (
+          {(locations.length > 1 ||
+            (userId != null &&
+              staff?.find((s) => s.id === userId)?.has_remote_rate)) && (
             <label className="flex flex-col gap-1.5">
               <span className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase">
-                Office
+                {staff?.find((s) => s.id === userId)?.has_remote_rate
+                  ? 'Rate bucket'
+                  : 'Office'}
               </span>
               <select
                 value={locationId ?? ''}
@@ -424,6 +464,9 @@ export default function AddHoursModal({ onClose, onSaved }: Props) {
                     {l.name}
                   </option>
                 ))}
+                {staff?.find((s) => s.id === userId)?.has_remote_rate && (
+                  <option value={WFH_BUCKET}>WFH / remote (WFH rate)</option>
+                )}
               </select>
             </label>
           )}

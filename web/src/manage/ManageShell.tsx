@@ -8,7 +8,8 @@ import AddHoursModal from './AddHoursModal';
 
 const TABS = [
   { to: 'today', label: 'Today' },
-  { to: 'pending', label: 'Pending', badge: true },
+  { to: 'pending', label: 'Pending', badge: 'pending' },
+  { to: 'lunch-review', label: 'Lunch review', badge: 'lunch' },
   { to: 'missed', label: 'Missed' },
   { to: 'period', label: 'Pay period' },
   { to: 'punches', label: 'Punches' },
@@ -21,6 +22,7 @@ export default function ManageShell({ children }: { children?: ReactNode }) {
   const { token, user, clear } = useAuth();
   const nav = useNavigate();
   const [pendingCount, setPendingCount] = useState(0);
+  const [lunchReviewCount, setLunchReviewCount] = useState(0);
   const [addHoursOpen, setAddHoursOpen] = useState(false);
   const [addHoursNonce, setAddHoursNonce] = useState(0);
 
@@ -29,18 +31,23 @@ export default function ManageShell({ children }: { children?: ReactNode }) {
     nav('/manage/login', { replace: true });
   }
 
-  // Poll the Today endpoint for pending_count so the Pending tab badge stays
-  // current. Today is already polled every 30s by the Today view; we duplicate
-  // here so the badge is up-to-date even when the manager is on another tab.
+  // Poll the Today endpoint for pending_count + lunch_review_count so the
+  // tab badges stay current even when the manager is on another tab.
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
     async function load() {
       try {
-        const r = await api<{ pending_count: number }>('/manage/today', {
+        const r = await api<{
+          pending_count: number;
+          lunch_review_count?: number;
+        }>('/manage/today', {
           token: token ?? undefined,
         });
-        if (!cancelled) setPendingCount(r.pending_count ?? 0);
+        if (!cancelled) {
+          setPendingCount(r.pending_count ?? 0);
+          setLunchReviewCount(r.lunch_review_count ?? 0);
+        }
       } catch {
         /* ignore */
       }
@@ -77,9 +84,14 @@ export default function ManageShell({ children }: { children?: ReactNode }) {
                 }
               >
                 <span>{t.label}</span>
-                {(t as any).badge && pendingCount > 0 && (
+                {(t as any).badge === 'pending' && pendingCount > 0 && (
                   <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-amber-300 text-ink text-[10px] font-bold tabular-nums">
                     {pendingCount}
+                  </span>
+                )}
+                {(t as any).badge === 'lunch' && lunchReviewCount > 0 && (
+                  <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-rose-300 text-ink text-[10px] font-bold tabular-nums">
+                    {lunchReviewCount}
                   </span>
                 )}
               </NavLink>

@@ -14,6 +14,9 @@ type StaffRow = {
   role: string;
   employment_type: 'W2' | '1099';
   pay_rate_cents: number | null;
+  // WFH rate — paid when employee punches with the WFH PIN that bypasses
+  // geofence. Null when the employee has only one rate (most staff).
+  pay_rate_cents_remote: number | null;
   is_owner: boolean;
   is_manager: boolean;
   track_hours: boolean;
@@ -98,6 +101,14 @@ export default function Staff() {
                   <span className="text-creamSoft text-sm tracking-tight inline-flex items-baseline gap-1">
                     <BlurredRate cents={r.pay_rate_cents} />
                     <span className="text-creamSoft/40 text-xs">/hr</span>
+                    {r.pay_rate_cents_remote !== null && (
+                      <span
+                        className="ml-2 text-[10px] tracking-[0.12em] uppercase rounded-full px-2 py-0.5 bg-sky-300/10 text-sky-300 border border-sky-300/30 inline-flex items-baseline gap-1"
+                        title={`WFH rate (paid when punching with WFH PIN)`}
+                      >
+                        WFH&nbsp;<BlurredRate cents={r.pay_rate_cents_remote} />/hr
+                      </span>
+                    )}
                   </span>
                 ) : !r.is_owner && (
                   <span className="text-creamSoft/40 text-xs italic">salary / commission</span>

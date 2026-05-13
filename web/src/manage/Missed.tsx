@@ -17,19 +17,36 @@ type MissedRequest = {
   reason: string;
   status: 'pending' | 'approved' | 'denied';
   created_at: string;
+  // Captured at request time from which PIN the employee used (added
+  // 2026-05-04). null = WFH PIN → WFH-rate punch on approve. number =
+  // home office id → office-rate punch on approve. Manager can spot a
+  // mis-filing before clicking approve.
+  location_id: number | null;
+};
+
+type DecidedRequest = MissedRequest & {
+  status: 'approved' | 'denied';
+  decided_at: string;
+  decider_name: string | null;
+  inserted_punch_id: number | null;
 };
 
 export default function Missed() {
   const { token } = useAuth();
   const { toast } = useToast();
   const [rows, setRows] = useState<MissedRequest[] | null>(null);
+  const [decidedToday, setDecidedToday] = useState<DecidedRequest[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
 
   async function load() {
-    const r = await api<{ requests: MissedRequest[] }>('/manage/missed', {
+    const r = await api<{
+      requests: MissedRequest[];
+      decided_today: DecidedRequest[];
+    }>('/manage/missed', {
       token: token ?? undefined,
     });
     setRows(r.requests);
+    setDecidedToday(r.decided_today ?? []);
   }
 
   useEffect(() => {
@@ -76,7 +93,11 @@ export default function Missed() {
         Pending requests from staff. Approve to insert the punch.
       </p>
 
-      <div className="mt-8 rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40">
+      <h2 className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase mt-8 mb-3">
+        Pending
+      </h2>
+
+      <div className="rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40">
         {!rows ? (
           <ListSkeleton rows={4} />
         ) : rows.length === 0 ? (
@@ -108,6 +129,11 @@ export default function Missed() {
                       <span className="text-creamSoft/60 tabular-nums">
                         {formatDateTime(r.proposed_ts)}
                       </span>
+                      {r.location_id == null && (
+                        <span className="text-sky-300/80 ml-2 text-xs uppercase tracking-[0.14em]">
+                          · WFH rate
+                        </span>
+                      )}
                     </div>
                     <div className="text-creamSoft/50 text-sm mt-2 italic">
                       "{r.reason}"
@@ -135,6 +161,63 @@ export default function Missed() {
           </ul>
         )}
       </div>
+
+      {decidedToday.length > 0 && (
+        <>
+          <h2 className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
+            Decided today
+          </h2>
+          <div className="rounded-3xl border border-creamSoft/10 bg-graphite/40 divide-y divide-creamSoft/5">
+            {decidedToday.map((d) => (
+              <div
+                key={d.id}
+                className="p-5 flex flex-col sm:flex-row sm:items-center gap-4"
+              >
+                <span
+                  className={[
+                    'rounded-full text-[10px] uppercase tracking-[0.18em] px-2 py-0.5 border shrink-0',
+                    d.status === 'approved'
+                      ? 'text-emerald-300 border-emerald-300/20 bg-emerald-300/10'
+                      : 'text-creamSoft/40 border-creamSoft/10',
+                  ].join(' ')}
+                >
+                  {d.status}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-creamSoft text-sm tracking-tight">
+                    {d.user_name}
+                  </div>
+                  <div className="text-sm mt-0.5">
+                    <span className={`font-medium ${punchTextClass(d.type as PunchType)}`}>
+                      {PUNCH_LABEL[d.type as PunchType]}
+                    </span>
+                    <span className="text-creamSoft/60"> · </span>
+                    <span className="text-creamSoft/60 tabular-nums">
+                      {formatDateTime(d.proposed_ts)}
+                    </span>
+                    {d.status === 'approved' && d.inserted_punch_id !== null && (
+                      <span className="text-emerald-300/80 ml-2 text-xs">
+                        · punch #{d.inserted_punch_id} added
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-creamSoft/50 text-sm mt-1 italic truncate">
+                    "{d.reason}"
+                  </div>
+                </div>
+                <div className="text-creamSoft/40 text-xs tabular-nums whitespace-nowrap">
+                  {formatDateTime(d.decided_at)}
+                  {d.decider_name && (
+                    <span className="block text-[10px] text-creamSoft/30">
+                      by {d.decider_name}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -22,16 +22,23 @@ export interface PunchRow {
 
 /**
  * Latest punch for a user — drives the kiosk UI's "what buttons to show" logic.
+ * Pass `client` to read inside an existing transaction (pairs with the
+ * per-user advisory lock in the kiosk punch handler).
  */
-export async function getLatestPunch(userId: number): Promise<PunchRow | null> {
-  const { rows } = await query<PunchRow>(
-    `SELECT id, user_id, location_id, type, ts, source, geofence_pass, flagged, flag_reason, auto_closed_at
+export async function getLatestPunch(
+  userId: number,
+  client?: PoolClient,
+): Promise<PunchRow | null> {
+  const sql = `SELECT id, user_id, location_id, type, ts, source, geofence_pass, flagged, flag_reason, auto_closed_at
      FROM timeclock.punches
      WHERE user_id = $1
      ORDER BY ts DESC
-     LIMIT 1`,
-    [userId]
-  );
+     LIMIT 1`;
+  if (client) {
+    const r = await client.query<PunchRow>(sql, [userId]);
+    return r.rows[0] ?? null;
+  }
+  const { rows } = await query<PunchRow>(sql, [userId]);
   return rows[0] ?? null;
 }
 
@@ -58,6 +65,9 @@ export function nextAllowedPunches(latest: PunchRow | null): PunchType[] {
   }
 }
 
+export type LunchReviewReason = 'no_lunch' | 'short_lunch';
+export type LunchReviewStatus = 'pending' | 'approved' | 'rejected';
+
 export interface RecordPunchInput {
   userId: number;
   locationId: number | null;
@@ -72,6 +82,12 @@ export interface RecordPunchInput {
   flagReason?: string | null;
   autoClosedAt?: Date | null;
   noLunchReason?: string | null;
+  // Lunch-review queue fields (migration 014). Set together when a
+  // clock_out lands as a flagged no-lunch / short-lunch shift; remain
+  // NULL for every other punch.
+  lunchReviewStatus?: LunchReviewStatus | null;
+  lunchReviewReason?: LunchReviewReason | null;
+  lunchReviewMinutes?: number | null;
   client?: PoolClient;
 }
 
@@ -81,8 +97,9 @@ export async function recordPunch(input: RecordPunchInput): Promise<PunchRow> {
     const r = await q.query(
       `INSERT INTO timeclock.punches
          (user_id, location_id, type, ts, source, ip, lat, lng, geofence_pass,
-          flagged, flag_reason, auto_closed_at, no_lunch_reason)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          flagged, flag_reason, auto_closed_at, no_lunch_reason,
+          lunch_review_status, lunch_review_reason, lunch_review_minutes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING id, user_id, location_id, type, ts, source, geofence_pass, flagged, flag_reason, auto_closed_at`,
       [
         input.userId, input.locationId, input.type, ts, input.source,
@@ -90,6 +107,9 @@ export async function recordPunch(input: RecordPunchInput): Promise<PunchRow> {
         input.geofencePass ?? null,
         !!input.flagged, input.flagReason ?? null, input.autoClosedAt ?? null,
         input.noLunchReason ?? null,
+        input.lunchReviewStatus ?? null,
+        input.lunchReviewReason ?? null,
+        input.lunchReviewMinutes ?? null,
       ]
     );
     return r.rows[0] as PunchRow;
@@ -100,48 +120,104 @@ export async function recordPunch(input: RecordPunchInput): Promise<PunchRow> {
 }
 
 /**
- * Decide whether a clock_out attempt requires the employee to attest why
- * they didn't take a lunch break. A "shift" is defined as the open span
- * starting at the most recent clock_in (after the most recent clock_out
- * or beginning of history). If that span has no lunch_start, and it has
- * been at least `minHours` long, attestation is required.
+ * Decide whether a clock_out attempt requires the employee to attest about
+ * lunch. A "shift" is the open span starting at the most recent clock_in
+ * (after the most recent clock_out or beginning of history).
  *
- * Returns hours_worked (decimal) for the UX copy ("you've been on the
- * clock for 8.4 hours…").
+ * Two trigger conditions, both gated by shift duration ≥ LUNCH_ATTESTATION_THRESHOLD_HOURS:
+ *   - reason='no_lunch'    — no lunch_start in the shift
+ *   - reason='short_lunch' — lunch was recorded but total < SHORT_LUNCH_THRESHOLD_MINUTES
+ *
+ * Returns hours_worked (decimal) for UX copy and lunch_minutes for the
+ * short-lunch case ("Lunch was only 7 minutes").
  */
 export const LUNCH_ATTESTATION_THRESHOLD_HOURS = 7;
+export const SHORT_LUNCH_THRESHOLD_MINUTES = 15;
+
+export interface LunchAttestationCheck {
+  required: boolean;
+  reason: LunchReviewReason | null;
+  hours_worked: number;
+  lunch_minutes: number | null;
+  shift_start: Date | null;
+}
 
 export async function shiftRequiresLunchAttestation(
   userId: number,
   now: Date = new Date(),
-): Promise<{ required: boolean; hours_worked: number; shift_start: Date | null }> {
+  client?: PoolClient,
+): Promise<LunchAttestationCheck> {
   // Walk back from most recent punch and find the open shift's clock_in.
   // We look at the last ~36 hours which comfortably covers any single
-  // shift even with auto-close edge cases.
-  const { rows } = await query<{ type: PunchType; ts: Date }>(
-    `SELECT type, ts FROM timeclock.punches
+  // shift even with auto-close edge cases. Pass `client` to read inside
+  // an active transaction.
+  const sql = `SELECT type, ts FROM timeclock.punches
      WHERE user_id = $1 AND ts >= $2
-     ORDER BY ts ASC`,
-    [userId, new Date(now.getTime() - 36 * 60 * 60 * 1000)],
-  );
+     ORDER BY ts ASC`;
+  const params = [userId, new Date(now.getTime() - 36 * 60 * 60 * 1000)];
+  const result = client
+    ? await client.query<{ type: PunchType; ts: Date }>(sql, params)
+    : await query<{ type: PunchType; ts: Date }>(sql, params);
+  const rows = result.rows;
   // Find the LAST clock_in that hasn't been closed by a subsequent clock_out.
+  // Track every (lunch_start, lunch_end) pair within the open shift so we
+  // can sum recorded lunch minutes for the short-lunch trigger. Lone
+  // lunch_start without a matching lunch_end (e.g. user forgot to clock
+  // back in) leaves lunch effectively unmeasured — treated as 0 min for
+  // safety, which surfaces it as short_lunch (manager will catch it).
   let shiftStart: Date | null = null;
-  let lunchSeenInShift = false;
+  let lunchOpenAt: Date | null = null;
+  let lunchTotalMs = 0;
+  let lunchSegmentCount = 0;
   for (const r of rows) {
     if (r.type === 'clock_in') {
       shiftStart = new Date(r.ts);
-      lunchSeenInShift = false;
+      lunchOpenAt = null;
+      lunchTotalMs = 0;
+      lunchSegmentCount = 0;
     } else if (r.type === 'clock_out') {
       shiftStart = null;
-      lunchSeenInShift = false;
+      lunchOpenAt = null;
+      lunchTotalMs = 0;
+      lunchSegmentCount = 0;
     } else if (r.type === 'lunch_start' && shiftStart) {
-      lunchSeenInShift = true;
+      lunchOpenAt = new Date(r.ts);
+      lunchSegmentCount += 1;
+    } else if (r.type === 'lunch_end' && shiftStart && lunchOpenAt) {
+      lunchTotalMs += new Date(r.ts).getTime() - lunchOpenAt.getTime();
+      lunchOpenAt = null;
     }
   }
   if (!shiftStart) {
-    return { required: false, hours_worked: 0, shift_start: null };
+    return {
+      required: false,
+      reason: null,
+      hours_worked: 0,
+      lunch_minutes: null,
+      shift_start: null,
+    };
   }
   const hours = (now.getTime() - shiftStart.getTime()) / (1000 * 60 * 60);
-  const required = !lunchSeenInShift && hours >= LUNCH_ATTESTATION_THRESHOLD_HOURS;
-  return { required, hours_worked: Math.round(hours * 10) / 10, shift_start: shiftStart };
+  const overThreshold = hours >= LUNCH_ATTESTATION_THRESHOLD_HOURS;
+  const lunchMinutes = Math.round(lunchTotalMs / 60_000);
+
+  let reason: LunchReviewReason | null = null;
+  let lunch_minutes: number | null = null;
+  if (overThreshold) {
+    if (lunchSegmentCount === 0) {
+      reason = 'no_lunch';
+      lunch_minutes = null;
+    } else if (lunchMinutes < SHORT_LUNCH_THRESHOLD_MINUTES) {
+      reason = 'short_lunch';
+      lunch_minutes = lunchMinutes;
+    }
+  }
+
+  return {
+    required: reason !== null,
+    reason,
+    hours_worked: Math.round(hours * 10) / 10,
+    lunch_minutes,
+    shift_start: shiftStart,
+  };
 }

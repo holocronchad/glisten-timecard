@@ -11,6 +11,11 @@ export interface PunchLite {
   ts: string | Date;
   flagged?: boolean;
   auto_closed_at?: Date | null;
+  // location_id reflects which PIN was used to clock in:
+  //   number → office PIN (geofence-bound)
+  //   null   → WFH PIN (no geofence)
+  // Required for rate-split payroll math.
+  location_id?: number | null;
 }
 
 export interface Segment {
@@ -23,6 +28,9 @@ export interface Segment {
   source_out_id: number | null;
   flagged: boolean;
   auto_closed: boolean;
+  // Inherited from the clock_in punch that opened this segment.
+  // null = WFH (paid at WFH rate); number = office id (paid at office rate).
+  location_id: number | null;
 }
 
 const PAIR: Record<PunchType, PunchType> = {
@@ -59,6 +67,7 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           source_out_id: null,
           flagged: true,
           auto_closed: false,
+          location_id: openIn.location_id ?? null,
         });
       }
       openIn = p;
@@ -75,6 +84,10 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           source_out_id: p.id,
           flagged: !!p.flagged,
           auto_closed: !!p.auto_closed_at,
+          // Segment's rate bucket is decided by the OPENING punch (clock_in/lunch_end);
+          // an employee who clocked in WFH and clocks out from the office still
+          // gets paid the WFH rate for that segment.
+          location_id: openIn.location_id ?? null,
         });
         openIn = null;
       }
@@ -91,6 +104,7 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           source_out_id: p.id,
           flagged: false,
           auto_closed: false,
+          location_id: openIn.location_id ?? null,
         });
         openIn = null;
         openLunch = p;
@@ -107,6 +121,9 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           source_out_id: p.id,
           flagged: false,
           auto_closed: false,
+          // Lunch is unpaid so location doesn't matter for pay; preserve the
+          // rate context for any UI that wants to color the segment.
+          location_id: openLunch.location_id ?? null,
         });
         openLunch = null;
       }
@@ -126,6 +143,7 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
       source_out_id: null,
       flagged: false,
       auto_closed: false,
+      location_id: openIn.location_id ?? null,
     });
   }
 

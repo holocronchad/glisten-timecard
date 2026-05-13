@@ -6,10 +6,12 @@ import ManageShell from './ManageShell';
 import Today from './Today';
 import Pending from './Pending';
 import Missed from './Missed';
+import LunchReview from './LunchReview';
 import Period from './Period';
 import Punches from './Punches';
 import Staff from './Staff';
 import Locations from './Locations';
+import LocationDetail from './LocationDetail';
 import EmployeeDetail from './EmployeeDetail';
 import Audit from './Audit';
 
@@ -31,10 +33,12 @@ function ManageRoutes() {
           <Route path="today" element={<Today />} />
           <Route path="pending" element={<Pending />} />
           <Route path="missed" element={<Missed />} />
+          <Route path="lunch-review" element={<LunchReview />} />
           <Route path="period" element={<Period />} />
           <Route path="punches" element={<Punches />} />
           <Route path="staff" element={<Staff />} />
           <Route path="offices" element={<Locations />} />
+          <Route path="offices/:id" element={<LocationDetail />} />
           <Route path="employees/:id" element={<EmployeeDetail />} />
           <Route path="audit" element={<Audit />} />
         </Route>

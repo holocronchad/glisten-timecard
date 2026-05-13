@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Pencil, Plus, Trash2, Check, X as XIcon, Clock } from 'lucide-react';
+import { Pencil, Plus, Trash2, Check, X as XIcon, Clock, LogIn, ShieldAlert, Eye, Fingerprint } from 'lucide-react';
 import { api } from '../shared/api';
 import { useAuth } from './auth';
 import { ListSkeleton } from './Skeleton';
@@ -9,13 +9,14 @@ type AuditEntry = {
   id: number;
   actor_user_id: number | null;
   actor_name: string | null;
-  resource_type: 'punch' | 'user' | 'location' | 'missed_request';
+  resource_type: 'punch' | 'user' | 'location' | 'missed_request' | 'session';
   resource_id: number;
   action: string;
   before_state: any;
   after_state: any;
   reason: string | null;
   ts: string;
+  ip: string | null;
 };
 
 const RESOURCE_LABEL: Record<AuditEntry['resource_type'], string> = {
@@ -23,6 +24,7 @@ const RESOURCE_LABEL: Record<AuditEntry['resource_type'], string> = {
   user: 'Staff',
   location: 'Office',
   missed_request: 'Missed-punch request',
+  session: 'Login',
 };
 
 const ACTION_ICON: Record<string, any> = {
@@ -33,6 +35,13 @@ const ACTION_ICON: Record<string, any> = {
   approve: Check,
   deny: XIcon,
   auto_close: Clock,
+  login: LogIn,
+  login_fail: ShieldAlert,
+  login_denied: ShieldAlert,
+  kiosk_open: Fingerprint,
+  kiosk_pin_fail: ShieldAlert,
+  me_view: Eye,
+  me_pin_fail: ShieldAlert,
 };
 
 const PAGE_SIZE = 50;
@@ -108,6 +117,7 @@ export default function Audit() {
           className="bg-graphite border border-creamSoft/15 rounded-full px-4 py-2 text-sm text-creamSoft focus:outline-none focus:border-cream/40"
         >
           <option value="all">All resources</option>
+          <option value="session">Logins</option>
           <option value="punch">Punches</option>
           <option value="user">Staff</option>
           <option value="location">Offices</option>
@@ -126,6 +136,17 @@ export default function Audit() {
             const isOpen = expanded.has(e.id);
             const showDiff =
               e.before_state || e.after_state ? true : false;
+            const isSession = e.resource_type === 'session';
+            const isFailEvent =
+              e.action === 'login_fail' ||
+              e.action === 'login_denied' ||
+              e.action === 'kiosk_pin_fail' ||
+              e.action === 'me_pin_fail';
+            const iconBgClass = isFailEvent
+              ? 'bg-amber-300 text-ink'
+              : isSession
+                ? 'bg-emerald-300 text-ink'
+                : 'bg-cream text-ink';
 
             return (
               <motion.div
@@ -140,20 +161,34 @@ export default function Audit() {
                 onClick={() => showDiff && toggle(e.id)}
               >
                 <div className="flex items-start gap-4">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-cream text-ink">
+                  <span
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${iconBgClass}`}
+                  >
                     <Icon size={16} />
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                       <span className="text-creamSoft text-sm tracking-tight">
-                        {e.actor_name ?? 'System'}
+                        {e.actor_name ??
+                          (e.action === 'login_fail' ||
+                          e.action === 'kiosk_pin_fail' ||
+                          e.action === 'me_pin_fail'
+                            ? 'Unknown PIN'
+                            : 'System')}
                       </span>
                       <span className="text-creamSoft/40 text-sm">
                         {actionPhrase(e)}
                       </span>
-                      <span className="text-creamSoft/40 text-xs uppercase tracking-[0.18em]">
-                        {RESOURCE_LABEL[e.resource_type]} #{e.resource_id}
-                      </span>
+                      {!isSession && (
+                        <span className="text-creamSoft/40 text-xs uppercase tracking-[0.18em]">
+                          {RESOURCE_LABEL[e.resource_type]} #{e.resource_id}
+                        </span>
+                      )}
+                      {e.ip && (
+                        <span className="text-creamSoft/40 text-[10px] tabular-nums tracking-[0.05em] bg-ink/60 rounded-full px-2 py-0.5">
+                          {e.ip}
+                        </span>
+                      )}
                     </div>
                     {e.reason && (
                       <div className="text-creamSoft/60 text-sm mt-1 italic">
@@ -230,6 +265,20 @@ function actionPhrase(e: AuditEntry): string {
       return 'denied';
     case 'auto_close':
       return 'auto-closed';
+    case 'login':
+      return 'logged in';
+    case 'login_fail':
+      return 'failed login attempt';
+    case 'login_denied':
+      return 'tried to log into manager portal (not a manager)';
+    case 'kiosk_open':
+      return 'opened kiosk session';
+    case 'kiosk_pin_fail':
+      return 'failed PIN at kiosk';
+    case 'me_view':
+      return 'viewed own hours';
+    case 'me_pin_fail':
+      return 'failed PIN at /me';
     default:
       return e.action;
   }

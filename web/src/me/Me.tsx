@@ -3,9 +3,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Flag } from 'lucide-react';
 import PinPad from '../kiosk/PinPad';
 import CloudBackground from '../kiosk/CloudBackground';
-import { api, ApiError, PunchType } from '../shared/api';
+import { api, ApiError, NetworkError, PunchType } from '../shared/api';
 import { formatTime, greetingForHour } from '../shared/geo';
-import { buildSegments, totalsByDay, totalMinutes } from '../shared/hours';
+import { buildSegments, totalsByDay, totalMinutes, splitMinutes, formatDateKey } from '../shared/hours';
 import { punchTextClass } from '../shared/punchType';
 
 type MeResponse = {
@@ -48,7 +48,9 @@ export default function Me() {
           ? e.status === 429
             ? 'Too many attempts — try again in a few minutes.'
             : 'PIN not recognized.'
-          : 'Connection failed.';
+          : e instanceof NetworkError
+            ? e.message
+            : 'Connection failed — try again in a moment.';
       setErr(msg);
       setShake((s) => s + 1);
     } finally {
@@ -131,6 +133,17 @@ function Hours({
   const dailyTotals = totalsByDay(segments);
   const weekTotalsMinutes = totalMinutesThisWeek(segments);
   const periodTotalMinutes = totalMinutes(segments);
+  // Dual-PIN employees (Filza office+WFH) see an Office / WFH split under
+  // each total. Single-PIN employees never see it (the breakdown collapses
+  // to one bucket = same number twice, which would be noisy).
+  const weekSplit = splitMinutes(
+    segments.filter((s) => {
+      const start = sundayOfThisAzWeekUtc();
+      return s.start >= start;
+    }),
+  );
+  const periodSplit = splitMinutes(segments);
+  const showSplit = periodSplit.office > 0 && periodSplit.wfh > 0;
 
   return (
     <div className="relative min-h-[100dvh] flex flex-col isolate">
@@ -160,8 +173,16 @@ function Hours({
         </motion.h1>
 
         <div className="mt-8 grid grid-cols-2 gap-3">
-          <Stat label="This week" value={hhmm(weekTotalsMinutes)} />
-          <Stat label="Last 14 days" value={hhmm(periodTotalMinutes)} />
+          <Stat
+            label="This week"
+            value={hhmm(weekTotalsMinutes)}
+            split={showSplit ? weekSplit : null}
+          />
+          <Stat
+            label="Last 14 days"
+            value={hhmm(periodTotalMinutes)}
+            split={showSplit ? periodSplit : null}
+          />
         </div>
 
         <h2 className="text-creamSoft/60 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
@@ -207,7 +228,7 @@ function Hours({
                   </div>
                 </div>
                 <div className="text-cream text-sm tabular-nums tracking-tight whitespace-nowrap">
-                  {prettyDate(p.ts.slice(0, 10))} · {formatTime(p.ts)}
+                  {prettyDate(formatDateKey(new Date(p.ts), 'America/Phoenix'))} · {formatTime(p.ts)}
                 </div>
                 {p.flagged && (
                   <Flag size={14} className="text-amber-300" />
@@ -226,15 +247,50 @@ function Hours({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  split,
+}: {
+  label: string;
+  value: string;
+  split?: { office: number; wfh: number } | null;
+}) {
   return (
     <div className="frosted-pane rounded-3xl p-5">
       <div className="text-creamSoft/60 text-xs tracking-[0.18em] uppercase">{label}</div>
       <div className="text-cream text-3xl tracking-tight font-light mt-1 tabular-nums">
         {value}
       </div>
+      {split && (
+        <div className="mt-2.5 flex flex-wrap gap-1.5 text-[11px] tabular-nums">
+          <span className="rounded-full bg-creamSoft/10 px-2 py-0.5 text-creamSoft/80">
+            Office <span className="text-cream">{hhmm(split.office)}</span>
+          </span>
+          <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-sky-300/85">
+            WFH <span className="text-sky-200">{hhmm(split.wfh)}</span>
+          </span>
+        </div>
+      )}
     </div>
   );
+}
+
+// AZ is fixed UTC-7 (no DST). Sunday 00:00 AZ = Sunday 07:00 UTC.
+function sundayOfThisAzWeekUtc(): Date {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Phoenix',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+  }).formatToParts(new Date());
+  const y = +parts.find((p) => p.type === 'year')!.value;
+  const m = +parts.find((p) => p.type === 'month')!.value;
+  const d = +parts.find((p) => p.type === 'day')!.value;
+  const wkdy = parts.find((p) => p.type === 'weekday')!.value;
+  const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wkdy);
+  return new Date(Date.UTC(y, m - 1, d - dow, 7, 0, 0));
 }
 
 function hhmm(minutes: number): string {
@@ -258,15 +314,9 @@ function prettyDate(yyyymmdd: string): string {
 function totalMinutesThisWeek(
   segments: ReturnType<typeof buildSegments>,
 ): number {
-  // Week starts Sunday in AZ
-  const now = new Date();
-  const az = new Date(now.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
-  const dow = az.getDay();
-  const sunday = new Date(az);
-  sunday.setHours(0, 0, 0, 0);
-  sunday.setDate(az.getDate() - dow);
+  const start = sundayOfThisAzWeekUtc();
   return segments
-    .filter((s) => s.paid && s.start >= sunday)
+    .filter((s) => s.paid && s.start >= start)
     .reduce(
       (acc, s) => acc + Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000)),
       0,

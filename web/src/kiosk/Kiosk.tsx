@@ -11,6 +11,7 @@ import CloudBackground from './CloudBackground';
 import {
   api,
   ApiError,
+  NetworkError,
   EmployeeLookup,
   LookupResponse,
   PunchResponse,
@@ -82,12 +83,16 @@ export default function Kiosk() {
   const [missedOpen, setMissedOpen] = useState(false);
   const [missedConfirm, setMissedConfirm] = useState(false);
   // Lunch-break attestation modal context. Set when server returns 422
-  // requires_lunch_attestation on a clock_out attempt; cleared when the
-  // user submits a reason or cancels.
+  // lunch_attestation_required on a clock_out attempt; cleared when the
+  // user submits a reason or cancels. reasonKind tells the modal which
+  // copy + quick-picks to render: 'no_lunch' (no break taken) vs
+  // 'short_lunch' (break < 15 min).
   const [attest, setAttest] = useState<{
     type: PunchType;
+    reasonKind: 'no_lunch' | 'short_lunch';
     hoursWorked: number;
     thresholdHours: number;
+    lunchMinutes: number | null;
   } | null>(null);
 
   const reset = useCallback(() => {
@@ -102,12 +107,18 @@ export default function Kiosk() {
   // when the user is about to be bounced back to the PIN screen mid-decision.
   const [nameCountdownMs, setNameCountdownMs] = useState<number | null>(null);
 
+  // When a modal is up (missed-punch / no-lunch attest / self-register), the
+  // user is actively typing — the parent kiosk's name-phase auto-reset must
+  // pause, otherwise they get bounced mid-sentence (Grace 2026-05-12 report).
+  const anyModalOpen =
+    missedOpen || attest !== null || registerOpenForPin !== null;
+
   useEffect(() => {
     if (phase.kind === 'confirm') {
       const t = setTimeout(reset, CONFIRM_PHASE_TIMEOUT_MS);
       return () => clearTimeout(t);
     }
-    if (phase.kind === 'name') {
+    if (phase.kind === 'name' && !anyModalOpen) {
       const start = Date.now();
       setNameCountdownMs(NAME_PHASE_TIMEOUT_MS);
       const tick = setInterval(() => {
@@ -123,7 +134,7 @@ export default function Kiosk() {
     }
     setNameCountdownMs(null);
     return undefined;
-  }, [phase, reset]);
+  }, [phase, reset, anyModalOpen]);
 
   async function handlePin(pin: string) {
     setPhase({ kind: 'matching', pin });
@@ -164,7 +175,9 @@ export default function Kiosk() {
               : e.status === 403
                 ? 'This account does not punch the clock.'
                 : e.message
-          : 'Connection failed.';
+          : e instanceof NetworkError
+            ? e.message
+            : 'Connection failed — try again in a moment.';
       setError(msg);
       setShake((s) => s + 1);
       vibrateError();
@@ -258,12 +271,19 @@ export default function Kiosk() {
         e.code === 'lunch_attestation_required'
       ) {
         const data = e.data as
-          | { hours_worked?: number; threshold_hours?: number }
+          | {
+              reason_kind?: 'no_lunch' | 'short_lunch';
+              hours_worked?: number;
+              threshold_hours?: number;
+              lunch_minutes?: number | null;
+            }
           | undefined;
         setAttest({
           type,
+          reasonKind: data?.reason_kind ?? 'no_lunch',
           hoursWorked: data?.hours_worked ?? 8,
           thresholdHours: data?.threshold_hours ?? 7,
+          lunchMinutes: data?.lunch_minutes ?? null,
         });
         setPhase({ kind: 'name', pin, lookup }); // back to buttons under the modal
         return;
@@ -276,7 +296,9 @@ export default function Kiosk() {
             : e.status === 409
               ? "Looks like you already did that. Take a look at the screen and try the other button."
               : e.message
-          : 'Punch failed — please try again.';
+          : e instanceof NetworkError
+            ? e.message
+            : 'Punch failed — please try again.';
       setError(msg);
       // Stay on the buttons screen so they can retry. Was: bounce to PIN,
       // which lost the session and let users tap the wrong place next.
@@ -480,8 +502,10 @@ export default function Kiosk() {
       <AnimatePresence>
         {attest && phase.kind === 'name' && (
           <NoLunchAttestModal
+            reasonKind={attest.reasonKind}
             hoursWorked={attest.hoursWorked}
             thresholdHours={attest.thresholdHours}
+            lunchMinutes={attest.lunchMinutes}
             onCancel={() => setAttest(null)}
             onSubmit={async (reason) => {
               const t = attest.type;

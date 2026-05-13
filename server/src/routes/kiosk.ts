@@ -15,11 +15,12 @@ import { matchLocation } from '../services/geofence';
 import {
   getLatestPunch, nextAllowedPunches, recordPunch,
   shiftRequiresLunchAttestation, LUNCH_ATTESTATION_THRESHOLD_HOURS,
-  type PunchType,
+  SHORT_LUNCH_THRESHOLD_MINUTES,
+  type PunchType, type LunchReviewReason,
 } from '../services/punches';
 import { cprDaysUntil } from '../services/cpr';
 import { matchRoster, type RosterCandidate } from '../services/nameMatch';
-import { query } from '../db';
+import { query, withTransaction } from '../db';
 
 const router = Router();
 
@@ -40,7 +41,27 @@ router.post('/lookup', async (req, res) => {
   const { pin, lat, lng } = parsed.data;
   const result = await findUserByPin(pin);
 
+  // Best-effort audit-trail identifiers (CF → XFF → req.ip).
+  const ip =
+    (req.headers['cf-connecting-ip'] as string) ||
+    (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+    req.ip ||
+    null;
+  const userAgent = (req.headers['user-agent'] as string | undefined) ?? null;
+
   if (!result.ok) {
+    // Failed PIN entry at kiosk — log without an actor (don't know who tried).
+    await query(
+      `INSERT INTO timeclock.audit_log
+         (actor_user_id, resource_type, resource_id, action, after_state, reason, ip)
+       VALUES (NULL, 'session', 0, 'kiosk_pin_fail', $1, $2, $3)`,
+      [
+        JSON.stringify({ user_agent: userAgent, reason: result.reason }),
+        result.reason === 'locked' ? 'PIN locked out at kiosk' : 'Unknown PIN at kiosk',
+        ip,
+      ],
+    ).catch(() => {});
+
     if (result.reason === 'locked') {
       res.status(429).json({
         error: 'Locked',
@@ -60,6 +81,26 @@ router.post('/lookup', async (req, res) => {
   // We do this BEFORE the track_hours check so owners (track_hours = false)
   // are routed correctly.
   if (user.is_owner || user.is_manager) {
+    // Manager portal access via kiosk PIN — same audit trail as direct
+    // /manage/login. action='login' so it groups with portal logins in the
+    // Logins filter.
+    await query(
+      `INSERT INTO timeclock.audit_log
+         (actor_user_id, resource_type, resource_id, action, after_state, reason, ip)
+       VALUES ($1, 'session', $1, 'login', $2, $3, $4)`,
+      [
+        user.id,
+        JSON.stringify({
+          user_agent: userAgent,
+          role: user.is_owner ? 'owner' : 'manager',
+          via: 'kiosk',
+          remote_pin: usedRemotePin,
+        }),
+        'Logged into manager portal (via kiosk PIN)',
+        ip,
+      ],
+    ).catch(() => {});
+
     const token = signManagerToken({
       user_id: user.id,
       is_owner: user.is_owner,
@@ -82,6 +123,24 @@ router.post('/lookup', async (req, res) => {
     res.status(403).json({ error: 'This account does not punch the clock' });
     return;
   }
+
+  // Employee opened a kiosk session (PIN reveal). Logged so Dr. Dawood / Anas
+  // can answer "who was at the kiosk at HH:MM" without relying on punches
+  // alone (someone might enter their PIN and walk away without punching).
+  await query(
+    `INSERT INTO timeclock.audit_log
+       (actor_user_id, resource_type, resource_id, action, after_state, reason, ip)
+     VALUES ($1, 'session', $1, 'kiosk_open', $2, $3, $4)`,
+    [
+      user.id,
+      JSON.stringify({
+        user_agent: userAgent,
+        remote_pin: usedRemotePin,
+      }),
+      usedRemotePin ? 'Opened kiosk session (WFH PIN)' : 'Opened kiosk session',
+      ip,
+    ],
+  ).catch(() => {});
 
   // Geofence check (best-effort — informational, not blocking the lookup)
   let inOffice: { id: number; distance_m: number } | null = null;
@@ -176,6 +235,7 @@ router.post('/register', async (req, res) => {
   }
 
   // PIN collision guard — check against every existing PIN (primary + remote).
+  // Parallel bcrypt sweep so a 21-user roster doesn't take ~2s per registration.
   const { rows: actives } = await query<{
     id: number;
     pin_hash: string | null;
@@ -183,21 +243,18 @@ router.post('/register', async (req, res) => {
   }>(
     `SELECT id, pin_hash, pin_hash_remote FROM timeclock.users WHERE active = true`,
   );
+  const collisionChecks: Promise<boolean>[] = [];
   for (const u of actives) {
-    if (u.pin_hash && (await bcrypt.compare(pin, u.pin_hash))) {
-      res.status(409).json({
-        error: 'PIN already in use',
-        message: 'That PIN is already taken — pick a different one.',
-      });
-      return;
-    }
-    if (u.pin_hash_remote && (await bcrypt.compare(pin, u.pin_hash_remote))) {
-      res.status(409).json({
-        error: 'PIN already in use',
-        message: 'That PIN is already taken — pick a different one.',
-      });
-      return;
-    }
+    if (u.pin_hash) collisionChecks.push(bcrypt.compare(pin, u.pin_hash));
+    if (u.pin_hash_remote) collisionChecks.push(bcrypt.compare(pin, u.pin_hash_remote));
+  }
+  const collisionResults = await Promise.all(collisionChecks);
+  if (collisionResults.some((ok) => ok)) {
+    res.status(409).json({
+      error: 'PIN already in use',
+      message: 'That PIN is already taken — pick a different one.',
+    });
+    return;
   }
 
   const fullName = `${first_name} ${last_name}`.replace(/\s+/g, ' ').trim();
@@ -485,191 +542,255 @@ router.post('/punch', async (req, res) => {
     return;
   }
 
-  // Fetch latest punch up front — we need it for state machine, geofence
-  // relaxation, AND stale-shift auto-close below.
-  let latest = await getLatestPunch(user.id);
-
-  // Stale-shift auto-close. If the user is trying to clock_in but the system
-  // sees an unclosed clock_in / lunch_start from > 16 hours ago, close it
-  // first (with the auto_close source) so this morning's clock_in can proceed.
-  // 16 hours covers an overnight + a generous buffer; the daily 6:59 AM AZ
-  // cron runs an hour earlier in normal flow, this is the safety net for
-  // employees who arrive before the cron has fired.
-  if (
-    type === 'clock_in' &&
-    latest != null &&
-    (latest.type === 'clock_in' || latest.type === 'lunch_start') &&
-    Date.now() - new Date(latest.ts).getTime() > 16 * 60 * 60 * 1000
-  ) {
-    const closeType: PunchType = latest.type === 'clock_in' ? 'clock_out' : 'lunch_end';
-    const closeTs = new Date(
-      new Date(latest.ts).getTime() + 8 * 60 * 60 * 1000  // start + 8h
-    );
-    await recordPunch({
-      userId: user.id,
-      locationId: latest.location_id,
-      type: closeType,
-      source: 'auto_close',
-      ts: closeTs,
-      flagged: true,
-      flagReason: `auto_close stale ${latest.type} from ${new Date(latest.ts).toISOString()}`,
-      autoClosedAt: new Date(),
-    });
-    latest = await getLatestPunch(user.id);
-  }
-
-  // Geofence resolution. Three paths:
-  //   1. Remote PIN → no geofence, no location.
-  //   2. Inside a known office geofence → tie punch to that office.
-  //   3. Outside geofence on a NON-clock_in punch where the previous punch
-  //      was at a known office within the last 12 hours → allow, flag for
-  //      review, inherit the previous location_id. This unblocks the common
-  //      failure where WiFi-based geolocation drifts past the 150m radius
-  //      right when the employee is mid-shift transitioning (start lunch,
-  //      end lunch, clock out). clock_in stays strict — that's the anti-
-  //      fraud boundary, can't allow it from anywhere.
-  let officeId: number | null = null;
-  let geofenceFlagged = false;
-  let geofenceFlagReason: string | null = null;
-
-  if (usedRemotePin) {
-    officeId = null;
-  } else {
-    // Geofence-required PIN: lat/lng are mandatory. WFH PINs above made
-    // them optional in the schema; if a non-WFH user reaches here without
-    // coords we hard-fail (vs. silently flag/inherit, which would let
-    // anyone bypass geofence by stripping coords client-side).
-    if (typeof lat !== 'number' || typeof lng !== 'number') {
-      res.status(400).json({
-        error: 'Location required',
-        message: 'Allow location in your browser, then try again.',
-      });
-      return;
-    }
-    const { rows: locations } = await query(
-      `SELECT id, lat, lng, geofence_m, active FROM timeclock.locations WHERE active = true`
-    );
-    const office = matchLocation({ lat, lng }, locations as any);
-    if (office) {
-      officeId = office.id;
-    } else {
-      // Outside geofence — try the mid-shift relaxation. Anything except
-      // clock_in is eligible if we have a known prior office and the last
-      // punch is recent.
-      const previousOpens: Record<string, PunchType[]> = {
-        lunch_end:   ['lunch_start'],
-        lunch_start: ['clock_in', 'lunch_end'],
-        clock_out:   ['clock_in', 'lunch_end'],
-      };
-      const eligibleOpens = previousOpens[type] ?? [];
-      const isMidShift = type !== 'clock_in';
-      const canRelax =
-        isMidShift &&
-        latest != null &&
-        eligibleOpens.includes(latest.type) &&
-        latest.location_id != null &&
-        Date.now() - new Date(latest.ts).getTime() < 12 * 60 * 60 * 1000;
-
-      if (canRelax && latest && latest.location_id != null) {
-        officeId = latest.location_id;
-        geofenceFlagged = true;
-        geofenceFlagReason =
-          `GPS reported outside office geofence at ${type}; auto-allowed because ${latest.type} was recorded at this location ${new Date(latest.ts).toISOString()}.`;
-      } else {
-        res.status(403).json({
-          error: 'Outside office',
-          message: 'You can only punch when you are at a Glisten Dental office.',
-        });
-        return;
-      }
-    }
-  }
-
-  const allowed = nextAllowedPunches(latest);
-  if (!allowed.includes(type as PunchType)) {
-    res.status(409).json({
-      error: 'Not allowed',
-      message: `You can't ${type.replace('_', ' ')} right now.`,
-      last: latest?.type ?? null,
-      allowed,
-    });
-    return;
-  }
-
   const ip =
     (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
     req.ip ||
     null;
 
-  // Per-user primary-PIN monitor (added 2026-04-29). Filza Tirmizi (id=16)
-  // has a different rate for WFH vs in-office, and her WFH PIN bypasses
-  // geofence by design. The concern: she could RDP into an office PC from
-  // home and use her primary PIN there — that punch would pass the geofence
-  // check (the office PC's browser geolocates inside the office) AND record
-  // location_id=office, claiming the in-office rate from home. We can't
-  // detect that scenario server-side perfectly, so we surface it for review:
-  // every primary-PIN punch from Filza gets flagged so Dr. Dawood sees it
-  // in the manager queue and can corroborate against the schedule.
-  const PRIMARY_PIN_MONITORED_USERS = new Set<number>([16]);
-  let monitorFlagged = false;
-  let monitorFlagReason: string | null = null;
-  if (PRIMARY_PIN_MONITORED_USERS.has(user.id) && !usedRemotePin) {
-    monitorFlagged = true;
-    monitorFlagReason = `primary_pin_review: ${user.name.split(' ')[0]} (in-office punch — verify vs WFH).`;
-  }
+  // The whole critical section runs inside one transaction with a per-user
+  // advisory lock, so two rapid double-tapped requests from the same user
+  // can't both pass the state-machine check (each reading "last = clock_in"
+  // before the other inserts) and both write a duplicate punch. The lock is
+  // released automatically at COMMIT/ROLLBACK. UI throttling masked the race
+  // in production (zero observed duplicates) but server-side is the real
+  // boundary.
+  type Outcome =
+    | { kind: 'success'; punchId: number; punchType: PunchType; punchTs: Date; locationId: number | null }
+    | { kind: 'error'; status: number; body: Record<string, unknown> };
 
-  const finalFlagged = geofenceFlagged || monitorFlagged;
-  const finalFlagReason = [geofenceFlagReason, monitorFlagReason]
-    .filter(Boolean)
-    .join(' | ') || null;
+  const outcome = await withTransaction<Outcome>(async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock($1)', [user.id]);
 
-  // No-lunch attestation gate (Anas + Dr. Dawood 2026-04-29). On a clock_out,
-  // if the open shift is ≥ LUNCH_ATTESTATION_THRESHOLD_HOURS hours and has
-  // no lunch_start in it, the kiosk must collect a reason from the employee
-  // before we record the clock_out. Once the kiosk pops the modal and the
-  // employee types a reason, the same request is resubmitted with
-  // no_lunch_reason set; we accept it then. Empty / whitespace-only reason
-  // also fails so a determined user can't just bypass with " ".
-  if (type === 'clock_out') {
-    const cleanedReason = (no_lunch_reason ?? '').trim();
-    const att = await shiftRequiresLunchAttestation(user.id);
-    if (att.required && cleanedReason.length < 2) {
-      res.status(422).json({
-        error: 'lunch_attestation_required',
-        message:
-          `You've been on the clock for ${att.hours_worked} hours and ` +
-          'haven\'t taken a lunch break. Please tell us why before clocking out.',
-        hours_worked: att.hours_worked,
-        threshold_hours: LUNCH_ATTESTATION_THRESHOLD_HOURS,
-        shift_start: att.shift_start?.toISOString() ?? null,
+    // Fetch latest punch INSIDE the lock — drives state machine, geofence
+    // relaxation, AND stale-shift auto-close below.
+    let latest = await getLatestPunch(user.id, client);
+
+    // Stale-shift auto-close. If the user is trying to clock_in but the
+    // system sees an unclosed clock_in / lunch_start from > 16 hours ago,
+    // close it first (with the auto_close source) so this morning's
+    // clock_in can proceed. 16 hours covers an overnight + a generous
+    // buffer; the daily 6:59 AM AZ cron runs an hour earlier in normal
+    // flow, this is the safety net for employees who arrive before the
+    // cron has fired.
+    if (
+      type === 'clock_in' &&
+      latest != null &&
+      (latest.type === 'clock_in' || latest.type === 'lunch_start') &&
+      Date.now() - new Date(latest.ts).getTime() > 16 * 60 * 60 * 1000
+    ) {
+      const closeType: PunchType = latest.type === 'clock_in' ? 'clock_out' : 'lunch_end';
+      const closeTs = new Date(
+        new Date(latest.ts).getTime() + 8 * 60 * 60 * 1000  // start + 8h
+      );
+      await recordPunch({
+        userId: user.id,
+        locationId: latest.location_id,
+        type: closeType,
+        source: 'auto_close',
+        ts: closeTs,
+        flagged: true,
+        flagReason: `auto_close stale ${latest.type} from ${new Date(latest.ts).toISOString()}`,
+        autoClosedAt: new Date(),
+        client,
       });
-      return;
+      latest = await getLatestPunch(user.id, client);
     }
-  }
 
-  const punch = await recordPunch({
-    userId: user.id,
-    locationId: officeId,
-    type: type as PunchType,
-    source: 'kiosk',
-    ip,
-    lat,
-    lng,
-    // Remote-PIN punches set geofencePass = true (the punch is allowed) but
-    // location_id is null — the punch shows up flagged-as-remote on manager
-    // views via the null location_id rather than a flag column.
-    // Closing punches outside the geofence are recorded WITH a location_id
-    // (inherited from the matching open) AND flagged for manager review.
-    geofencePass: !geofenceFlagged,
-    flagged: finalFlagged,
-    flagReason: finalFlagReason,
-    noLunchReason: type === 'clock_out' ? (no_lunch_reason ?? null) : null,
+    // Geofence resolution. Three paths:
+    //   1. Remote PIN → no geofence, no location.
+    //   2. Inside a known office geofence → tie punch to that office.
+    //   3. Outside geofence on a NON-clock_in punch where the previous
+    //      punch was at a known office within the last 12 hours → allow,
+    //      flag for review, inherit the previous location_id. This
+    //      unblocks the common failure where WiFi-based geolocation drifts
+    //      past the 150m radius right when the employee is mid-shift
+    //      transitioning (start lunch, end lunch, clock out). clock_in
+    //      stays strict — that's the anti-fraud boundary, can't allow it
+    //      from anywhere.
+    let officeId: number | null = null;
+    let geofenceFlagged = false;
+    let geofenceFlagReason: string | null = null;
+
+    if (usedRemotePin) {
+      officeId = null;
+    } else {
+      // Geofence-required PIN: lat/lng are mandatory. WFH PINs above made
+      // them optional in the schema; if a non-WFH user reaches here
+      // without coords we hard-fail (vs. silently flag/inherit, which
+      // would let anyone bypass geofence by stripping coords client-side).
+      if (typeof lat !== 'number' || typeof lng !== 'number') {
+        return {
+          kind: 'error',
+          status: 400,
+          body: {
+            error: 'Location required',
+            message: 'Allow location in your browser, then try again.',
+          },
+        };
+      }
+      const locRes = await client.query(
+        `SELECT id, lat, lng, geofence_m, active FROM timeclock.locations WHERE active = true`,
+      );
+      const office = matchLocation({ lat, lng }, locRes.rows as any);
+      if (office) {
+        officeId = office.id;
+      } else {
+        const previousOpens: Record<string, PunchType[]> = {
+          lunch_end:   ['lunch_start'],
+          lunch_start: ['clock_in', 'lunch_end'],
+          clock_out:   ['clock_in', 'lunch_end'],
+        };
+        const eligibleOpens = previousOpens[type] ?? [];
+        const isMidShift = type !== 'clock_in';
+        const canRelax =
+          isMidShift &&
+          latest != null &&
+          eligibleOpens.includes(latest.type) &&
+          latest.location_id != null &&
+          Date.now() - new Date(latest.ts).getTime() < 12 * 60 * 60 * 1000;
+
+        if (canRelax && latest && latest.location_id != null) {
+          officeId = latest.location_id;
+          geofenceFlagged = true;
+          geofenceFlagReason =
+            `GPS reported outside office geofence at ${type}; auto-allowed because ${latest.type} was recorded at this location ${new Date(latest.ts).toISOString()}.`;
+        } else {
+          return {
+            kind: 'error',
+            status: 403,
+            body: {
+              error: 'Outside office',
+              message: 'You can only punch when you are at a Glisten Dental office.',
+            },
+          };
+        }
+      }
+    }
+
+    const allowed = nextAllowedPunches(latest);
+    if (!allowed.includes(type as PunchType)) {
+      return {
+        kind: 'error',
+        status: 409,
+        body: {
+          error: 'Not allowed',
+          message: `You can't ${type.replace('_', ' ')} right now.`,
+          last: latest?.type ?? null,
+          allowed,
+        },
+      };
+    }
+
+    // Primary-PIN monitor (added 2026-04-29 for Filza, generalized
+    // 2026-05-04). Any user with a separate WFH rate
+    // (pay_rate_cents_remote IS NOT NULL) has a rate-arbitrage incentive:
+    // they could RDP into an office PC from home and use their primary PIN
+    // there — that punch would pass the geofence check (the office PC's
+    // browser geolocates inside the office) AND record location_id=office,
+    // claiming the in-office rate from home. We can't detect that scenario
+    // server-side perfectly, so we surface it for review: every primary-
+    // PIN punch from a dual-rate user gets flagged so Dr. Dawood sees it
+    // in the manager queue and can corroborate against the schedule.
+    const isDualRate = user.pay_rate_cents_remote != null;
+    let monitorFlagged = false;
+    let monitorFlagReason: string | null = null;
+    if (isDualRate && !usedRemotePin) {
+      monitorFlagged = true;
+      monitorFlagReason = `primary_pin_review: ${user.name.split(' ')[0]} (in-office punch — verify vs WFH).`;
+    }
+
+    const finalFlagged = geofenceFlagged || monitorFlagged;
+    const finalFlagReason = [geofenceFlagReason, monitorFlagReason]
+      .filter(Boolean)
+      .join(' | ') || null;
+
+    // Lunch attestation gate (Anas + Dr. Dawood 2026-04-29, extended
+    // 2026-05-05). On a clock_out, if the open shift is ≥
+    // LUNCH_ATTESTATION_THRESHOLD_HOURS AND either (a) had no lunch_start
+    // OR (b) had a recorded lunch < SHORT_LUNCH_THRESHOLD_MINUTES, the
+    // kiosk must collect a reason from the employee before we record the
+    // clock_out. Once the kiosk pops the modal and the employee types a
+    // reason, the same request is resubmitted with no_lunch_reason set;
+    // we accept it then. Empty / whitespace-only reason also fails so a
+    // determined user can't just bypass with " ". Read inside the lock so
+    // two concurrent clock_outs can't both observe pre-attestation state.
+    let queueReviewReason: LunchReviewReason | null = null;
+    let queueReviewMinutes: number | null = null;
+    if (type === 'clock_out') {
+      const cleanedReason = (no_lunch_reason ?? '').trim();
+      const att = await shiftRequiresLunchAttestation(user.id, new Date(), client);
+      if (att.required && cleanedReason.length < 2) {
+        return {
+          kind: 'error',
+          status: 422,
+          body: {
+            error: 'lunch_attestation_required',
+            message:
+              att.reason === 'short_lunch'
+                ? `You've been on the clock for ${att.hours_worked} hours and your ` +
+                  `lunch was only ${att.lunch_minutes} minute${att.lunch_minutes === 1 ? '' : 's'}. ` +
+                  'Please tell us why before clocking out.'
+                : `You've been on the clock for ${att.hours_worked} hours and ` +
+                  "haven't taken a lunch break. Please tell us why before clocking out.",
+            reason_kind: att.reason,
+            hours_worked: att.hours_worked,
+            lunch_minutes: att.lunch_minutes,
+            threshold_hours: LUNCH_ATTESTATION_THRESHOLD_HOURS,
+            short_lunch_threshold_minutes: SHORT_LUNCH_THRESHOLD_MINUTES,
+            shift_start: att.shift_start?.toISOString() ?? null,
+          },
+        };
+      }
+      // Reason supplied (employee accepted the modal). Capture the
+      // trigger kind so the punch lands in the manager review queue.
+      if (att.required && cleanedReason.length >= 2) {
+        queueReviewReason = att.reason;
+        queueReviewMinutes = att.lunch_minutes;
+      }
+    }
+
+    const punch = await recordPunch({
+      userId: user.id,
+      locationId: officeId,
+      type: type as PunchType,
+      source: 'kiosk',
+      ip,
+      lat,
+      lng,
+      // Remote-PIN punches set geofencePass = true (the punch is allowed)
+      // but location_id is null — the punch shows up flagged-as-remote on
+      // manager views via the null location_id rather than a flag column.
+      // Closing punches outside the geofence are recorded WITH a
+      // location_id (inherited from the matching open) AND flagged for
+      // manager review.
+      geofencePass: !geofenceFlagged,
+      flagged: finalFlagged,
+      flagReason: finalFlagReason,
+      noLunchReason: type === 'clock_out' ? (no_lunch_reason ?? null) : null,
+      lunchReviewStatus: queueReviewReason ? 'pending' : null,
+      lunchReviewReason: queueReviewReason,
+      lunchReviewMinutes: queueReviewMinutes,
+      client,
+    });
+
+    return {
+      kind: 'success',
+      punchId: punch.id,
+      punchType: punch.type,
+      punchTs: punch.ts,
+      locationId: officeId,
+    };
   });
 
+  if (outcome.kind === 'error') {
+    res.status(outcome.status).json(outcome.body);
+    return;
+  }
+
   res.json({
-    punch: { id: punch.id, type: punch.type, ts: punch.ts },
+    punch: { id: outcome.punchId, type: outcome.punchType, ts: outcome.punchTs },
     message: messageFor(type as PunchType, user.name),
-    location_id: officeId,
+    location_id: outcome.locationId,
     pending_approval: !user.approved,
     remote_punch: usedRemotePin,
   });
@@ -728,12 +849,43 @@ router.post('/missed-punch', async (req, res) => {
     day: '2-digit',
   }).format(ts);
 
+  // De-dupe: reject if a pending request already exists for the same
+  // (user, type, date). Stops accidental double-submits when the kiosk is
+  // slow and the employee clicks "Submit" twice — without this, Dr. Dawood
+  // ended up with two near-identical pending requests to triage by hand.
+  const { rows: existing } = await query<{ id: number }>(
+    `SELECT id FROM timeclock.missed_punch_requests
+     WHERE user_id = $1 AND date = $2 AND type = $3 AND status = 'pending'
+     LIMIT 1`,
+    [result.user.id, date, type],
+  );
+  if (existing.length > 0) {
+    res.status(409).json({
+      error: 'Already pending',
+      message: `You already have a pending ${type.replace('_', ' ')} request for that day. A manager will review it shortly.`,
+      request_id: existing[0].id,
+    });
+    return;
+  }
+
+  // Capture which rate bucket the request belongs to (added 2026-05-04).
+  // The PIN used to file the request is a strong signal: WFH PIN → WFH-rate
+  // request (location_id = null), primary PIN → office-rate request (use
+  // user.home_location_id). Manager can override on approval.
+  const { rows: homeRows } = await query<{ home_location_id: number | null }>(
+    `SELECT home_location_id FROM timeclock.users WHERE id = $1`,
+    [result.user.id],
+  );
+  const requestLocationId = result.usedRemotePin
+    ? null
+    : (homeRows[0]?.home_location_id ?? null);
+
   const { rows } = await query(
     `INSERT INTO timeclock.missed_punch_requests
-       (user_id, date, type, proposed_ts, reason)
-     VALUES ($1, $2, $3, $4, $5)
+       (user_id, date, type, proposed_ts, reason, location_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, status, created_at`,
-    [result.user.id, date, type, ts, reason],
+    [result.user.id, date, type, ts, reason, requestLocationId],
   );
 
   res.status(201).json({
@@ -751,12 +903,39 @@ router.post('/me', async (req, res) => {
     res.status(400).json({ error: 'Bad request' });
     return;
   }
+  const ip =
+    (req.headers['cf-connecting-ip'] as string) ||
+    (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+    req.ip ||
+    null;
+  const userAgent = (req.headers['user-agent'] as string | undefined) ?? null;
   const result = await findUserByPin(parsed.data.pin);
   if (!result.ok) {
+    await query(
+      `INSERT INTO timeclock.audit_log
+         (actor_user_id, resource_type, resource_id, action, after_state, reason, ip)
+       VALUES (NULL, 'session', 0, 'me_pin_fail', $1, $2, $3)`,
+      [
+        JSON.stringify({ user_agent: userAgent, reason: result.reason }),
+        result.reason === 'locked' ? 'PIN locked out at /me' : 'Invalid PIN at /me',
+        ip,
+      ],
+    ).catch(() => {});
     res.status(401).json({ error: result.reason === 'locked' ? 'Locked' : 'Invalid PIN' });
     return;
   }
   const user = result.user;
+  await query(
+    `INSERT INTO timeclock.audit_log
+       (actor_user_id, resource_type, resource_id, action, after_state, reason, ip)
+     VALUES ($1, 'session', $1, 'me_view', $2, $3, $4)`,
+    [
+      user.id,
+      JSON.stringify({ user_agent: userAgent }),
+      'Viewed own hours',
+      ip,
+    ],
+  ).catch(() => {});
 
   const { rows: punches } = await query(
     `SELECT id, location_id, type, ts, flagged
