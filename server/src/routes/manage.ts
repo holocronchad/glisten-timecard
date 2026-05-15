@@ -1464,8 +1464,12 @@ router.post('/lunch-reviews/:punchId', async (req, res) => {
   res.json({ ok: true, status: result.status });
 });
 
-// ── GET /manage/staff (owner) ──────────────────────────────────────────────
-router.get('/staff', requireOwner, async (_req, res) => {
+// ── GET /manage/staff (manager+) ───────────────────────────────────────────
+// Owners get full rows. Non-owner managers (e.g. a front-office manager who
+// keeps staff CPR certs current) get the same roster with pay rates stripped
+// server-side — pay is owner-only and must never leave the server for a
+// non-owner, regardless of what the client chooses to render.
+router.get('/staff', requireManager, async (req, res) => {
   const { rows } = await query(
     `SELECT id, name, email, role, employment_type, pay_rate_cents, pay_rate_cents_remote,
             is_owner, is_manager, track_hours, active, last_login_at, created_at,
@@ -1473,7 +1477,14 @@ router.get('/staff', requireOwner, async (_req, res) => {
      FROM timeclock.users
      ORDER BY active DESC, name ASC`,
   );
-  res.json({ staff: rows });
+  const staff = req.auth?.is_owner
+    ? rows
+    : rows.map((r: any) => ({
+        ...r,
+        pay_rate_cents: null,
+        pay_rate_cents_remote: null,
+      }));
+  res.json({ staff });
 });
 
 // ── GET /manage/employees ──────────────────────────────────────────────────
@@ -1586,7 +1597,7 @@ const patchStaffSchema = z.object({
   reason: z.string().min(1).max(500),
 });
 
-router.patch('/staff/:id', requireOwner, async (req, res) => {
+router.patch('/staff/:id', requireManager, async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (Number.isNaN(id)) {
     res.status(400).json({ error: 'Bad id' });
@@ -1598,6 +1609,31 @@ router.patch('/staff/:id', requireOwner, async (req, res) => {
     return;
   }
   const d = parsed.data;
+
+  // Non-owner managers may edit CPR certification ONLY. Pay, role, PIN,
+  // employment type, manager/active status, name and email are owner-only.
+  // Enforced here at the boundary — the client also hides these controls for
+  // non-owners, but this is the line that actually protects payroll.
+  if (!req.auth?.is_owner) {
+    const ownerOnlyTouched =
+      d.name !== undefined ||
+      d.email !== undefined ||
+      d.role !== undefined ||
+      d.employment_type !== undefined ||
+      d.pin !== undefined ||
+      d.pay_rate_cents !== undefined ||
+      d.pay_rate_cents_remote !== undefined ||
+      d.is_manager !== undefined ||
+      d.track_hours !== undefined ||
+      d.active !== undefined;
+    if (ownerOnlyTouched) {
+      res.status(403).json({
+        error:
+          'Managers can only update CPR certification. Pay, role, and access changes are owner-only.',
+      });
+      return;
+    }
+  }
   const updates: string[] = [];
   const params: any[] = [];
   function add(field: string, value: any) {

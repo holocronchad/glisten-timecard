@@ -30,7 +30,8 @@ type StaffRow = {
 };
 
 export default function Staff() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  const isOwner = !!user?.is_owner;
   const [rows, setRows] = useState<StaffRow[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<StaffRow | null>(null);
@@ -56,14 +57,20 @@ export default function Staff() {
           <h1 className="text-[40px] leading-[1.05] tracking-tight font-light">
             <span className="font-serif italic text-cream">Staff</span>
           </h1>
-          <p className="text-creamSoft/40 text-sm mt-1">PIN, role, employment type.</p>
+          <p className="text-creamSoft/40 text-sm mt-1">
+            {isOwner
+              ? 'PIN, role, employment type.'
+              : 'Tap a person to record their CPR certification.'}
+          </p>
         </div>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="inline-flex items-center gap-2 rounded-full bg-cream text-ink px-4 h-10 text-sm tracking-tight"
-        >
-          <Plus size={16} /> Add staff
-        </button>
+        {isOwner && (
+          <button
+            onClick={() => setShowAdd(true)}
+            className="inline-flex items-center gap-2 rounded-full bg-cream text-ink px-4 h-10 text-sm tracking-tight"
+          >
+            <Plus size={16} /> Add staff
+          </button>
+        )}
       </div>
 
       <div className="mt-8 rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40 divide-y divide-creamSoft/5">
@@ -73,11 +80,8 @@ export default function Staff() {
           rows.map((r) => (
             <div
               key={r.id}
-              onClick={() => !r.is_owner && setEditing(r)}
-              className={[
-                'flex items-center gap-4 p-5 transition-colors',
-                r.is_owner ? '' : 'cursor-pointer hover:bg-creamSoft/5',
-              ].join(' ')}
+              onClick={() => setEditing(r)}
+              className="flex items-center gap-4 p-5 transition-colors cursor-pointer hover:bg-creamSoft/5"
             >
               <div className="flex-1">
                 <div
@@ -100,12 +104,11 @@ export default function Staff() {
                   {r.role} · {r.employment_type}
                   {r.email && <> · {r.email}</>}
                 </div>
-                {r.track_hours && !r.is_owner && (
-                  <CprPill expiresAt={r.cpr_expires_at} org={r.cpr_org} />
-                )}
+                <CprPill expiresAt={r.cpr_expires_at} org={r.cpr_org} />
               </div>
               <div className="flex flex-col items-end gap-1 text-right">
-                {r.pay_rate_cents !== null ? (
+                {isOwner &&
+                  (r.pay_rate_cents !== null ? (
                   <span className="text-creamSoft text-sm tracking-tight inline-flex items-baseline gap-1">
                     <BlurredRate cents={r.pay_rate_cents} />
                     <span className="text-creamSoft/40 text-xs">/hr</span>
@@ -120,7 +123,7 @@ export default function Staff() {
                   </span>
                 ) : !r.is_owner && (
                   <span className="text-creamSoft/40 text-xs italic">salary / commission</span>
-                )}
+                ))}
                 {r.active && r.track_hours && (
                   <span className="text-creamSoft/40 text-[10px] uppercase tracking-[0.18em]">
                     on the clock
@@ -281,7 +284,8 @@ function EditStaffModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  const isOwner = !!user?.is_owner;
   const { toast } = useToast();
   const [name, setName] = useState(staff.name);
   const [email, setEmail] = useState(staff.email ?? '');
@@ -389,45 +393,55 @@ function EditStaffModal({
         </div>
 
         <div className="flex flex-col gap-3">
-          <Field label="Name" value={name} onChange={setName} />
-          <Field label="Email" type="email" value={email} onChange={setEmail} />
-          <Field label="Role" value={role} onChange={setRole} />
-          <Field
-            label="New PIN (leave blank to keep current)"
-            value={pin}
-            onChange={setPin}
-            maxLength={4}
-          />
-          <div className="grid grid-cols-2 gap-3">
-            <Toggle
-              label="W2"
-              active={employmentType === 'W2'}
-              onClick={() => setEmploymentType('W2')}
-            />
-            <Toggle
-              label="1099"
-              active={employmentType === '1099'}
-              onClick={() => setEmploymentType('1099')}
-            />
-          </div>
-          <label className="flex items-center gap-2 text-sm text-creamSoft/70">
-            <input
-              type="checkbox"
-              checked={isManager}
-              onChange={(e) => setIsManager(e.target.checked)}
-              className="accent-cream"
-            />
-            Manager (can view dashboard)
-          </label>
-          <label className="flex items-center gap-2 text-sm text-creamSoft/70">
-            <input
-              type="checkbox"
-              checked={active}
-              onChange={(e) => setActive(e.target.checked)}
-              className="accent-cream"
-            />
-            Active
-          </label>
+          {!isOwner && (
+            <p className="text-creamSoft/40 text-xs tracking-tight -mt-1 mb-1">
+              You can record this person's CPR certification below. Pay, role,
+              and access are owner-only.
+            </p>
+          )}
+          {isOwner && (
+            <>
+              <Field label="Name" value={name} onChange={setName} />
+              <Field label="Email" type="email" value={email} onChange={setEmail} />
+              <Field label="Role" value={role} onChange={setRole} />
+              <Field
+                label="New PIN (leave blank to keep current)"
+                value={pin}
+                onChange={setPin}
+                maxLength={4}
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <Toggle
+                  label="W2"
+                  active={employmentType === 'W2'}
+                  onClick={() => setEmploymentType('W2')}
+                />
+                <Toggle
+                  label="1099"
+                  active={employmentType === '1099'}
+                  onClick={() => setEmploymentType('1099')}
+                />
+              </div>
+              <label className="flex items-center gap-2 text-sm text-creamSoft/70">
+                <input
+                  type="checkbox"
+                  checked={isManager}
+                  onChange={(e) => setIsManager(e.target.checked)}
+                  className="accent-cream"
+                />
+                Manager (can view dashboard)
+              </label>
+              <label className="flex items-center gap-2 text-sm text-creamSoft/70">
+                <input
+                  type="checkbox"
+                  checked={active}
+                  onChange={(e) => setActive(e.target.checked)}
+                  className="accent-cream"
+                />
+                Active
+              </label>
+            </>
+          )}
 
           {/* CPR cert — manager-side entry. All three fields atomic; leave all
               blank to clear. Mirrors the kiosk's CprPanel invariant so a

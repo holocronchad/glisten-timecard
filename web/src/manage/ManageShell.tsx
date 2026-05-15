@@ -13,7 +13,7 @@ const TABS = [
   { to: 'missed', label: 'Missed' },
   { to: 'period', label: 'Pay period' },
   { to: 'punches', label: 'Punches' },
-  { to: 'staff', label: 'Staff', ownerOnly: true },
+  { to: 'staff', label: 'Staff', ownerOnly: false },
   { to: 'offices', label: 'Offices', ownerOnly: true },
   { to: 'audit', label: 'Audit', ownerOnly: true },
 ];

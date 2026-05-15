@@ -240,14 +240,12 @@ export default function EmployeeDetail() {
         />
       </div>
 
-      {data.user.track_hours && !data.user.is_owner && (
-        <CprCard
-          org={data.user.cpr_org}
-          issuedAt={data.user.cpr_issued_at}
-          expiresAt={data.user.cpr_expires_at}
-          updatedAt={data.user.cpr_updated_at}
-        />
-      )}
+      <CprCard
+        org={data.user.cpr_org}
+        issuedAt={data.user.cpr_issued_at}
+        expiresAt={data.user.cpr_expires_at}
+        updatedAt={data.user.cpr_updated_at}
+      />
 
       {/* Dual-rate breakdown — only renders for employees with separate WFH rate.
           Built 2026-05-04 to give Dr. Dawood the at-a-glance answer for Filza
