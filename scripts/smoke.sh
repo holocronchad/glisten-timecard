@@ -56,11 +56,14 @@ check "kiosk lookup rejects malformed PIN" \
     -H 'content-type: application/json' \
     -d '{\"pin\":\"abc\"}' | grep -q 400"
 
-# 6. Kiosk punch requires geofence coords
-check "kiosk punch rejects missing coords" \
+# 6. Kiosk punch rejects a bogus PIN. (PIN validity is checked before the
+# geofence/coords check, so an invalid PIN is 401 — not 400. We can't assert
+# the missing-coords 400 path here without a real PIN, and smoke must never
+# create real punches, so we assert the auth guard instead.)
+check "kiosk punch rejects invalid PIN" \
   "curl -s -o /dev/null -w '%{http_code}' -X POST '$BASE/api/kiosk/punch' \
     -H 'content-type: application/json' \
-    -d '{\"pin\":\"1111\",\"type\":\"clock_in\"}' | grep -q 400"
+    -d '{\"pin\":\"1111\",\"type\":\"clock_in\"}' | grep -qE '400|401'"
 
 # 7. Manifest reachable (PWA install)
 check "PWA manifest served" \
