@@ -9,3 +9,9 @@ dist/
 coverage/
 *.tsbuildinfo
 
+# Local session state (10-98 bookkeeping). Never shipped (deploy.sh tars only
+# server/dist + server/package.json + web/dist) and never committed — but it
+# MUST be ignored so an untracked state/ dir can't trip deploy.sh's
+# dirty-tree abort and block future deploys.
+state/
+
