@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, X } from 'lucide-react';
+import { Plus, X, ShieldCheck } from 'lucide-react';
 import { api, ApiError } from '../shared/api';
 import { useAuth } from './auth';
 import { ListSkeleton } from './Skeleton';
 import { useToast } from '../shared/toast';
 import BlurredRate from './BlurredRate';
+import { cprBucketFromExpiry, toDateInputValue } from '../shared/cprStatus';
 
 type StaffRow = {
   id: number;
@@ -22,6 +23,10 @@ type StaffRow = {
   track_hours: boolean;
   active: boolean;
   last_login_at: string | null;
+  cpr_org: string | null;
+  cpr_issued_at: string | null;
+  cpr_expires_at: string | null;
+  cpr_updated_at: string | null;
 };
 
 export default function Staff() {
@@ -95,6 +100,9 @@ export default function Staff() {
                   {r.role} · {r.employment_type}
                   {r.email && <> · {r.email}</>}
                 </div>
+                {r.track_hours && !r.is_owner && (
+                  <CprPill expiresAt={r.cpr_expires_at} org={r.cpr_org} />
+                )}
               </div>
               <div className="flex flex-col items-end gap-1 text-right">
                 {r.pay_rate_cents !== null ? (
@@ -285,6 +293,10 @@ function EditStaffModal({
   const [isManager, setIsManager] = useState(staff.is_manager);
   const [active, setActive] = useState(staff.active);
   const [reason, setReason] = useState('');
+  // CPR cert — three inputs treated as one atomic group on save.
+  const [cprOrg, setCprOrg] = useState(staff.cpr_org ?? '');
+  const [cprIssued, setCprIssued] = useState(toDateInputValue(staff.cpr_issued_at));
+  const [cprExpires, setCprExpires] = useState(toDateInputValue(staff.cpr_expires_at));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -301,6 +313,30 @@ function EditStaffModal({
       if (isManager !== staff.is_manager) body.is_manager = isManager;
       if (active !== staff.active) body.active = active;
       if (pin) body.pin = pin;
+
+      // CPR diff: only send if any of the three changed vs. server state.
+      const cprChanged =
+        (cprOrg || null) !== (staff.cpr_org || null) ||
+        cprIssued !== toDateInputValue(staff.cpr_issued_at) ||
+        cprExpires !== toDateInputValue(staff.cpr_expires_at);
+      if (cprChanged) {
+        const trimmedOrg = cprOrg.trim();
+        const allEmpty = !trimmedOrg && !cprIssued && !cprExpires;
+        const allFilled = !!trimmedOrg && !!cprIssued && !!cprExpires;
+        if (!allEmpty && !allFilled) {
+          setErr('CPR cert: fill all three fields (org, issued, expires) or clear all three.');
+          setBusy(false);
+          return;
+        }
+        if (allFilled && cprIssued >= cprExpires) {
+          setErr('CPR cert: expiry must be after the issued date.');
+          setBusy(false);
+          return;
+        }
+        body.cpr_org = allEmpty ? null : trimmedOrg;
+        body.cpr_issued_at = allEmpty ? null : cprIssued;
+        body.cpr_expires_at = allEmpty ? null : cprExpires;
+      }
 
       if (Object.keys(body).length === 1) {
         setErr('Nothing changed.');
@@ -392,6 +428,53 @@ function EditStaffModal({
             />
             Active
           </label>
+
+          {/* CPR cert — manager-side entry. All three fields atomic; leave all
+              blank to clear. Mirrors the kiosk's CprPanel invariant so a
+              partially-filled record can never land in the audit log. */}
+          <div className="mt-2 rounded-2xl border border-creamSoft/10 bg-ink/40 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <ShieldCheck size={14} className="text-creamSoft/60" />
+              <span className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase">
+                CPR certification
+              </span>
+            </div>
+            <div className="flex flex-col gap-3">
+              <Field
+                label="Issuing organization"
+                value={cprOrg}
+                onChange={setCprOrg}
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase">
+                    Issued
+                  </span>
+                  <input
+                    type="date"
+                    value={cprIssued}
+                    onChange={(e) => setCprIssued(e.target.value)}
+                    className="bg-ink border border-creamSoft/10 rounded-2xl px-4 py-3 text-creamSoft focus:outline-none focus:border-cream/40 transition-colors"
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase">
+                    Expires
+                  </span>
+                  <input
+                    type="date"
+                    value={cprExpires}
+                    onChange={(e) => setCprExpires(e.target.value)}
+                    className="bg-ink border border-creamSoft/10 rounded-2xl px-4 py-3 text-creamSoft focus:outline-none focus:border-cream/40 transition-colors"
+                  />
+                </label>
+              </div>
+              <p className="text-creamSoft/40 text-[11px] tracking-tight">
+                Leave all three blank to clear an existing cert from the record.
+              </p>
+            </div>
+          </div>
+
           <label className="flex flex-col gap-1.5 mt-1">
             <span className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase">
               Reason for change
@@ -469,5 +552,34 @@ function Toggle({
     >
       {label}
     </button>
+  );
+}
+
+function CprPill({
+  expiresAt,
+  org,
+}: {
+  expiresAt: string | null;
+  org: string | null;
+}) {
+  const info = cprBucketFromExpiry(expiresAt);
+  const detail = org && info.bucket !== 'missing' ? ` · ${org}` : '';
+  return (
+    <span
+      className={[
+        'mt-1.5 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5',
+        'text-[10px] tracking-[0.12em] uppercase',
+        info.pillClass,
+      ].join(' ')}
+      title={
+        expiresAt
+          ? `CPR expires ${new Date(expiresAt).toLocaleDateString('en-US', { timeZone: 'UTC' })}${detail}`
+          : 'No CPR cert on file'
+      }
+    >
+      <ShieldCheck size={10} />
+      {info.label}
+      {detail}
+    </span>
   );
 }

@@ -955,7 +955,8 @@ router.get('/employees/:id', async (req, res) => {
 
   const { rows: users } = await query(
     `SELECT id, name, email, role, employment_type, pay_rate_cents, pay_rate_cents_remote,
-            is_owner, is_manager, track_hours, active, home_location_id
+            is_owner, is_manager, track_hours, active, home_location_id,
+            cpr_org, cpr_issued_at, cpr_expires_at, cpr_updated_at
      FROM timeclock.users WHERE id = $1`,
     [id],
   );
@@ -1467,7 +1468,8 @@ router.post('/lunch-reviews/:punchId', async (req, res) => {
 router.get('/staff', requireOwner, async (_req, res) => {
   const { rows } = await query(
     `SELECT id, name, email, role, employment_type, pay_rate_cents, pay_rate_cents_remote,
-            is_owner, is_manager, track_hours, active, last_login_at, created_at
+            is_owner, is_manager, track_hours, active, last_login_at, created_at,
+            cpr_org, cpr_issued_at, cpr_expires_at, cpr_updated_at
      FROM timeclock.users
      ORDER BY active DESC, name ASC`,
   );
@@ -1574,6 +1576,13 @@ const patchStaffSchema = z.object({
   is_manager: z.boolean().optional(),
   track_hours: z.boolean().optional(),
   active: z.boolean().optional(),
+  // CPR cert — atomic group. Send org+issued+expires together (all three
+  // strings) to set, or all three explicitly null to clear. Mirrors
+  // /kiosk/cpr's invariant so the manager can't accidentally land a
+  // half-written cert record. Date strings are YYYY-MM-DD.
+  cpr_org: z.string().trim().min(1).max(120).nullable().optional(),
+  cpr_issued_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  cpr_expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   reason: z.string().min(1).max(500),
 });
 
@@ -1605,6 +1614,48 @@ router.patch('/staff/:id', requireOwner, async (req, res) => {
   if (d.track_hours !== undefined) add('track_hours', d.track_hours);
   if (d.active !== undefined) add('active', d.active);
   if (d.pin) add('pin_hash', await hashPin(d.pin));
+
+  // CPR cert is atomic — accept all three (set) or all three null (clear).
+  // Anything else is a 400 to prevent a half-written record landing in the
+  // audit log.
+  const cprTouched =
+    d.cpr_org !== undefined ||
+    d.cpr_issued_at !== undefined ||
+    d.cpr_expires_at !== undefined;
+  if (cprTouched) {
+    if (
+      d.cpr_org === undefined ||
+      d.cpr_issued_at === undefined ||
+      d.cpr_expires_at === undefined
+    ) {
+      res.status(400).json({
+        error:
+          'CPR fields are atomic — send cpr_org, cpr_issued_at, cpr_expires_at together.',
+      });
+      return;
+    }
+    const allNull =
+      d.cpr_org === null && d.cpr_issued_at === null && d.cpr_expires_at === null;
+    const allSet =
+      d.cpr_org !== null && d.cpr_issued_at !== null && d.cpr_expires_at !== null;
+    if (!allNull && !allSet) {
+      res.status(400).json({
+        error: 'CPR fields must all be set or all cleared (mixed null is rejected).',
+      });
+      return;
+    }
+    if (allSet && d.cpr_issued_at! >= d.cpr_expires_at!) {
+      res.status(400).json({
+        error: 'CPR expiry must be after the issued date.',
+      });
+      return;
+    }
+    add('cpr_org', d.cpr_org);
+    add('cpr_issued_at', d.cpr_issued_at);
+    add('cpr_expires_at', d.cpr_expires_at);
+    add('cpr_updated_at', allNull ? null : new Date());
+  }
+
   if (updates.length === 0) {
     res.status(400).json({ error: 'No changes' });
     return;
@@ -1621,7 +1672,8 @@ router.patch('/staff/:id', requireOwner, async (req, res) => {
     const updated = await client.query(
       `UPDATE timeclock.users SET ${updates.join(', ')}, updated_at = NOW()
        WHERE id = $${params.length}
-       RETURNING id, name, email, role, employment_type, is_manager, track_hours, active`,
+       RETURNING id, name, email, role, employment_type, is_manager, track_hours, active,
+                cpr_org, cpr_issued_at, cpr_expires_at, cpr_updated_at`,
       params,
     );
     await client.query(

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, ChevronLeft, ChevronRight, Flag, Pencil, Coffee } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, Flag, Pencil, Coffee, ShieldCheck } from 'lucide-react';
 import { api } from '../shared/api';
 import { useAuth } from './auth';
 import { formatTime } from '../shared/geo';
@@ -9,6 +9,7 @@ import { buildSegments, totalsByDay, totalMinutes, type PunchType } from '../sha
 import EditPunchModal from './EditPunchModal';
 import BlurredRate from './BlurredRate';
 import { PUNCH_LABEL, punchTextClass } from '../shared/punchType';
+import { cprBucketFromExpiry, formatCprDate } from '../shared/cprStatus';
 
 type EmployeeDetailResponse = {
   user: {
@@ -25,6 +26,10 @@ type EmployeeDetailResponse = {
     is_manager: boolean;
     track_hours: boolean;
     active: boolean;
+    cpr_org: string | null;
+    cpr_issued_at: string | null;
+    cpr_expires_at: string | null;
+    cpr_updated_at: string | null;
   };
   // index = null when this is a custom range (not a known pay period)
   period: { index: number | null; start: string; end: string; label: string };
@@ -234,6 +239,15 @@ export default function EmployeeDetail() {
           )}
         />
       </div>
+
+      {data.user.track_hours && !data.user.is_owner && (
+        <CprCard
+          org={data.user.cpr_org}
+          issuedAt={data.user.cpr_issued_at}
+          expiresAt={data.user.cpr_expires_at}
+          updatedAt={data.user.cpr_updated_at}
+        />
+      )}
 
       {/* Dual-rate breakdown — only renders for employees with separate WFH rate.
           Built 2026-05-04 to give Dr. Dawood the at-a-glance answer for Filza
@@ -595,6 +609,64 @@ function enumerateDays(startIso: string, endIso: string): string[] {
   }
   // Dedupe in case the period boundary lands oddly.
   return Array.from(new Set(days));
+}
+
+function CprCard({
+  org,
+  issuedAt,
+  expiresAt,
+  updatedAt,
+}: {
+  org: string | null;
+  issuedAt: string | null;
+  expiresAt: string | null;
+  updatedAt: string | null;
+}) {
+  const info = cprBucketFromExpiry(expiresAt);
+  return (
+    <div
+      className={[
+        'mt-6 rounded-3xl border p-5 flex items-center gap-4',
+        info.bucket === 'expired'
+          ? 'bg-rose-950/20 border-rose-300/30'
+          : info.bucket === 'expiring_soon'
+            ? 'bg-amber-950/20 border-amber-300/30'
+            : info.bucket === 'missing'
+              ? 'bg-graphite/40 border-creamSoft/15'
+              : 'bg-graphite/40 border-creamSoft/10',
+      ].join(' ')}
+    >
+      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-creamSoft/10">
+        <ShieldCheck size={20} />
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="text-creamSoft/40 text-[10px] tracking-[0.18em] uppercase">
+          CPR certification
+        </div>
+        <div className="text-creamSoft text-lg tracking-tight mt-0.5">
+          {info.bucket === 'missing'
+            ? 'No cert on file'
+            : info.label}
+        </div>
+        <div className="text-creamSoft/50 text-xs tracking-tight mt-1">
+          {expiresAt ? (
+            <>
+              {org ?? 'Unknown org'} · issued {formatCprDate(issuedAt)} · expires{' '}
+              {formatCprDate(expiresAt)}
+            </>
+          ) : (
+            <>Add it from Staff → edit this employee.</>
+          )}
+          {updatedAt && expiresAt && (
+            <span className="text-creamSoft/30">
+              {' · last updated '}
+              {formatCprDate(updatedAt)}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
