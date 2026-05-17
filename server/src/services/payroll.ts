@@ -19,6 +19,7 @@
 
 import { query } from '../db';
 import { buildSegments, type PunchLite } from './hours';
+import { localYmdInTz } from './payPeriod';
 import { config } from '../config';
 
 export interface PayrollRow {
@@ -48,12 +49,29 @@ export interface PayrollRow {
 }
 
 function weekKey(d: Date, tz: string): string {
-  // ISO week start = Monday. We anchor to Sunday for US payroll convention.
-  const local = new Date(d.toLocaleString('en-US', { timeZone: tz }));
-  const dow = local.getDay(); // 0 = Sunday
-  const sunday = new Date(local);
-  sunday.setDate(local.getDate() - dow);
-  return sunday.toISOString().slice(0, 10);
+  // Sunday-anchored payroll week (US convention) for the punch's tz-LOCAL date.
+  //
+  // Correctness requirement: the bucket must depend ONLY on the punch's
+  // tz-local calendar date — never on the Node process's timezone. The old
+  // implementation round-tripped through `new Date(d.toLocaleString(...,tz))`
+  // (re-parsed in PROCESS-local TZ) then `.toISOString()` (rendered in UTC);
+  // those only cancel when the process TZ is exactly UTC, so a non-UTC process
+  // mis-bucketed punches near the Sat→Sun boundary → split week → wrong OT →
+  // wrong pay. (Prod runs UTC so it was masked; this removes the landmine.)
+  //
+  // Fix: extract the tz-local Y/M/D via the same Intl primitive payPeriod.ts
+  // uses in production (localYmdInTz — no string round-trip), then do the
+  // Sunday math in TZ-free UTC integer space (UTC has no DST; pure calendar
+  // day arithmetic). Result is identical to the old code under UTC (proven by
+  // payrollWeekKey.test.ts) and now also correct under any process TZ.
+  const { year, month, day } = localYmdInTz(d, tz);
+  const asUtc = Date.UTC(year, month - 1, day);
+  const dow = new Date(asUtc).getUTCDay(); // 0 = Sunday
+  const sunday = new Date(asUtc - dow * 24 * 60 * 60 * 1000);
+  const y = sunday.getUTCFullYear();
+  const m = String(sunday.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(sunday.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
 }
 
 /**

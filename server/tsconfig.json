@@ -14,5 +14,6 @@
     "resolveJsonModule": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "//exclude": "Tests/probes are run by vitest (own transform); they must NOT be emitted into dist/ shipped to the prod payroll server. Excluding them also keeps the build off vitest/import.meta-only syntax.",
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/**/__tests__/**"]
 }

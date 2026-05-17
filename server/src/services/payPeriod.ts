@@ -112,7 +112,7 @@ function startOfDayInTz(date: Date, tz: string): Date {
   return new Date(`${y}-${m}-${d}T00:00:00${offsetForTz(tz, date)}`);
 }
 
-function localYmdInTz(date: Date, tz: string): { year: number; month: number; day: number } {
+export function localYmdInTz(date: Date, tz: string): { year: number; month: number; day: number } {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz,
     year: 'numeric',
