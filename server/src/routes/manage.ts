@@ -1706,9 +1706,14 @@ router.patch('/staff/:id', requireManager, async (req, res) => {
       return { ok: false, status: 404, error: 'Not found' };
     }
     const updated = await client.query(
+      // pay_rate_cents + pay_rate_cents_remote are in RETURNING so a raise/cut
+      // is fully captured in audit_log.after_state (before_state already has
+      // them via SELECT *). Without this a pay change logged who/when/why but
+      // not the new rate — an incomplete trail for a payroll system.
       `UPDATE timeclock.users SET ${updates.join(', ')}, updated_at = NOW()
        WHERE id = $${params.length}
        RETURNING id, name, email, role, employment_type, is_manager, track_hours, active,
+                pay_rate_cents, pay_rate_cents_remote,
                 cpr_org, cpr_issued_at, cpr_expires_at, cpr_updated_at`,
       params,
     );
