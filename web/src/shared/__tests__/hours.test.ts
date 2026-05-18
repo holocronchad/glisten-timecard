@@ -4,6 +4,7 @@ import {
   totalsByDay,
   totalMinutes,
   splitMinutes,
+  decimalHours,
   type PunchLite,
 } from '../hours';
 
@@ -80,5 +81,23 @@ describe('web shared/hours', () => {
     expect(totals).toEqual([
       { date: '2026-04-27', worked_minutes: 480, open: false },
     ]);
+  });
+});
+
+describe('decimalHours (payroll display)', () => {
+  // Must stay byte-identical to the payroll CSV's `(minutes / 60).toFixed(2)`
+  // (server/src/services/payroll.ts rowsToCsv) — Dr. Dawood reconciles the
+  // on-screen number against the exported CSV, so the formats cannot diverge.
+  it('formats whole + fractional hours to two decimals', () => {
+    expect(decimalHours(495)).toBe('8.25'); // 8h 15m
+    expect(decimalHours(500)).toBe('8.33'); // 8h 20m (repeating, truncated by toFixed)
+    expect(decimalHours(2400)).toBe('40.00'); // exactly 40h
+    expect(decimalHours(0)).toBe('0.00');
+  });
+
+  it('matches the CSV convention exactly', () => {
+    for (const m of [0, 1, 7, 90, 495, 2403, 4811]) {
+      expect(decimalHours(m)).toBe((m / 60).toFixed(2));
+    }
   });
 });

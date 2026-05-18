@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Download, Check, AlertTriangle } from 'lucide-react';
 import { api, ApiError } from '../shared/api';
+import { decimalHours } from '../shared/hours';
 import { useAuth } from './auth';
 import { useToast } from '../shared/toast';
 import { ListSkeleton } from './Skeleton';
@@ -335,15 +336,21 @@ export default function Period() {
                   <div className="text-creamSoft tabular-nums tracking-tight">
                     {hhmm(e.total_minutes)}
                   </div>
+                  {/* Decimal hours for payroll (Dr. Dawood, 2026-05-17): same
+                      hundredths-of-an-hour format the payroll CSV exports, so
+                      what she reads here equals what she keys into payroll. */}
+                  <div className="text-creamSoft/40 text-[11px] tabular-nums tracking-tight">
+                    {decimalHours(e.total_minutes)} hrs
+                  </div>
                   {/* Show office/WFH split only when employee actually has WFH hours
                       (otherwise it's just clutter — most staff have one rate). */}
                   {e.has_split_rate && (
                     <div className="mt-1 flex items-center gap-2 justify-end text-[10px] tabular-nums">
                       <span className="rounded-full px-2 py-0.5 bg-cream/10 text-creamSoft border border-creamSoft/20">
-                        Office {hhmm(e.office_minutes)}
+                        Office {hhmm(e.office_minutes)} · {decimalHours(e.office_minutes)}
                       </span>
                       <span className="rounded-full px-2 py-0.5 bg-sky-300/10 text-sky-300 border border-sky-300/30">
-                        WFH {hhmm(e.wfh_minutes)}
+                        WFH {hhmm(e.wfh_minutes)} · {decimalHours(e.wfh_minutes)}
                       </span>
                     </div>
                   )}

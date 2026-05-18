@@ -128,6 +128,15 @@ export function totalsByDay(
   return [...buckets.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
+// Decimal-hour string for payroll (e.g. 495 min → "8.25"). Two decimal
+// places = hundredths of an hour, the convention Dr. Dawood's payroll uses
+// and the EXACT format the payroll CSV already emits
+// (`(minutes / 60).toFixed(2)` in server/src/services/payroll.ts rowsToCsv).
+// Display-only — never feeds a pay computation.
+export function decimalHours(minutes: number): string {
+  return (minutes / 60).toFixed(2);
+}
+
 export function totalMinutes(segments: Segment[]): number {
   return segments
     .filter((s) => s.paid)

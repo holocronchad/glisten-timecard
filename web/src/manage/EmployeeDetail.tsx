@@ -5,7 +5,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Flag, Pencil, Coffee, ShieldCheck
 import { api } from '../shared/api';
 import { useAuth } from './auth';
 import { formatTime } from '../shared/geo';
-import { buildSegments, totalsByDay, totalMinutes, type PunchType } from '../shared/hours';
+import { buildSegments, totalsByDay, totalMinutes, decimalHours, type PunchType } from '../shared/hours';
 import EditPunchModal from './EditPunchModal';
 import BlurredRate from './BlurredRate';
 import { PUNCH_LABEL, punchTextClass } from '../shared/punchType';
@@ -226,7 +226,11 @@ export default function EmployeeDetail() {
       />
 
       <div className="mt-8 grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Stat label="Period total" value={hhmm(total)} />
+        <Stat
+          label="Period total"
+          value={hhmm(total)}
+          sub={`${decimalHours(total)} hrs`}
+        />
         <Stat label="Days worked" value={String(dailyTotals.length)} />
         <Stat
           label="Flagged"
@@ -276,6 +280,9 @@ export default function EmployeeDetail() {
               <div className="text-creamSoft text-2xl tracking-tight tabular-nums font-light">
                 {hhmm(data.rate_summary.office_minutes)}
               </div>
+              <div className="text-creamSoft/40 text-[11px] tracking-tight tabular-nums">
+                {decimalHours(data.rate_summary.office_minutes)} hrs
+              </div>
               <div className="text-creamSoft/50 text-xs mt-1 tabular-nums inline-flex items-baseline gap-1">
                 ×&nbsp;<BlurredRate cents={data.rate_summary.office_rate_cents} />/hr
               </div>
@@ -297,6 +304,9 @@ export default function EmployeeDetail() {
               <div className="text-creamSoft text-2xl tracking-tight tabular-nums font-light">
                 {hhmm(data.rate_summary.wfh_minutes)}
               </div>
+              <div className="text-creamSoft/40 text-[11px] tracking-tight tabular-nums">
+                {decimalHours(data.rate_summary.wfh_minutes)} hrs
+              </div>
               <div className="text-creamSoft/50 text-xs mt-1 tabular-nums inline-flex items-baseline gap-1">
                 ×&nbsp;<BlurredRate cents={data.rate_summary.wfh_rate_cents} />/hr
               </div>
@@ -313,6 +323,9 @@ export default function EmployeeDetail() {
               <div>
                 <div className="text-creamSoft text-2xl tracking-tight tabular-nums font-light">
                   {hhmm(data.rate_summary.total_minutes)}
+                </div>
+                <div className="text-creamSoft/40 text-[11px] tracking-tight tabular-nums">
+                  {decimalHours(data.rate_summary.total_minutes)} hrs
                 </div>
                 <div className="text-cream text-2xl tracking-tight mt-2 tabular-nums font-medium">
                   <BlurredRate cents={data.rate_summary.total_pay_cents} className="text-base font-medium" />
@@ -667,7 +680,15 @@ function CprCard({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+}) {
   return (
     <div className="rounded-3xl border border-creamSoft/10 bg-graphite/40 p-4">
       <div className="text-creamSoft/40 text-[10px] tracking-[0.18em] uppercase">
@@ -676,6 +697,11 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="text-creamSoft text-2xl tracking-tight font-light mt-1 tabular-nums">
         {value}
       </div>
+      {sub && (
+        <div className="text-creamSoft/40 text-xs tracking-tight tabular-nums mt-0.5">
+          {sub}
+        </div>
+      )}
     </div>
   );
 }
