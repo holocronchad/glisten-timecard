@@ -7,6 +7,7 @@ import { ListSkeleton } from './Skeleton';
 import { useToast } from '../shared/toast';
 import BlurredRate from './BlurredRate';
 import { cprBucketFromExpiry, toDateInputValue } from '../shared/cprStatus';
+import { centsToDollars, parseDollarsToCents } from '../shared/money';
 
 type StaffRow = {
   id: number;
@@ -296,6 +297,11 @@ function EditStaffModal({
   const [pin, setPin] = useState('');
   const [isManager, setIsManager] = useState(staff.is_manager);
   const [active, setActive] = useState(staff.active);
+  // Pay rates edited in dollars; converted to integer cents on save (the DB
+  // unit). Pre-filled from current value; blank office rate = leave as-is
+  // (never silently wipe to salary), blank WFH rate = no separate WFH rate.
+  const [officeRate, setOfficeRate] = useState(centsToDollars(staff.pay_rate_cents));
+  const [wfhRate, setWfhRate] = useState(centsToDollars(staff.pay_rate_cents_remote));
   const [reason, setReason] = useState('');
   // CPR cert — three inputs treated as one atomic group on save.
   const [cprOrg, setCprOrg] = useState(staff.cpr_org ?? '');
@@ -317,6 +323,53 @@ function EditStaffModal({
       if (isManager !== staff.is_manager) body.is_manager = isManager;
       if (active !== staff.active) body.active = active;
       if (pin) body.pin = pin;
+
+      // ── Pay rate diff (owner-only; server re-enforces owner + bounds) ──
+      // Office / primary rate. Pre-filled, so blank means the owner cleared
+      // it — for an already-hourly employee that's almost always a mistake
+      // mid-raise, so block it rather than silently null the rate.
+      const officeStr = officeRate.trim();
+      if (officeStr === '') {
+        if (staff.pay_rate_cents !== null) {
+          setErr('Hourly rate can’t be blank for an hourly employee.');
+          setBusy(false);
+          return;
+        }
+      } else {
+        const p = parseDollarsToCents(officeStr);
+        if (!p.ok) {
+          setErr(`Hourly rate: ${p.error}`);
+          setBusy(false);
+          return;
+        }
+        if (p.cents !== staff.pay_rate_cents) {
+          if (!confirmRateJump('Hourly rate', staff.pay_rate_cents, p.cents)) {
+            setBusy(false);
+            return;
+          }
+          body.pay_rate_cents = p.cents;
+        }
+      }
+      // WFH rate is optional + nullable — blank legitimately means "no
+      // separate WFH rate, fall back to the office rate" (server contract).
+      const wfhStr = wfhRate.trim();
+      if (wfhStr === '') {
+        if (staff.pay_rate_cents_remote !== null) body.pay_rate_cents_remote = null;
+      } else {
+        const p = parseDollarsToCents(wfhStr);
+        if (!p.ok) {
+          setErr(`WFH rate: ${p.error}`);
+          setBusy(false);
+          return;
+        }
+        if (p.cents !== staff.pay_rate_cents_remote) {
+          if (!confirmRateJump('WFH rate', staff.pay_rate_cents_remote, p.cents)) {
+            setBusy(false);
+            return;
+          }
+          body.pay_rate_cents_remote = p.cents;
+        }
+      }
 
       // CPR diff: only send if any of the three changed vs. server state.
       const cprChanged =
@@ -440,6 +493,37 @@ function EditStaffModal({
                 />
                 Active
               </label>
+
+              {/* Pay rate — owner-only. Raises/cuts go here. Mirrors the
+                  CPR-card grouping. WFH rate only matters for dual-PIN staff
+                  (e.g. Filza); blank = single rate. */}
+              <div className="mt-2 rounded-2xl border border-creamSoft/10 bg-ink/40 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase">
+                    Pay rate
+                  </span>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <DollarField
+                    label="Hourly rate"
+                    value={officeRate}
+                    onChange={setOfficeRate}
+                  />
+                  <DollarField
+                    label="WFH rate — optional, blank if none"
+                    value={wfhRate}
+                    onChange={setWfhRate}
+                  />
+                  <p className="text-creamSoft/40 text-[11px] tracking-tight leading-relaxed">
+                    Stored to the cent. A rate change recalculates any pay
+                    period not yet signed &amp; exported — including the current
+                    one — at the new rate. To start a raise next period, sign
+                    &amp; export the current period first, then change it here.
+                    The change is written to the audit log with your reason
+                    below.
+                  </p>
+                </div>
+              </div>
             </>
           )}
 
@@ -541,6 +625,57 @@ function Field({
         className="bg-ink border border-creamSoft/10 rounded-2xl px-4 py-3 text-creamSoft focus:outline-none focus:border-cream/40 transition-colors"
       />
     </label>
+  );
+}
+
+function DollarField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase">
+        {label}
+      </span>
+      <div className="flex items-center bg-ink border border-creamSoft/10 rounded-2xl px-4 focus-within:border-cream/40 transition-colors">
+        <span className="text-creamSoft/40 text-sm mr-1.5">$</span>
+        <input
+          inputMode="decimal"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="0.00"
+          className="flex-1 min-w-0 bg-transparent py-3 text-creamSoft focus:outline-none placeholder:text-creamSoft/30"
+        />
+        <span className="text-creamSoft/40 text-xs ml-1.5 whitespace-nowrap">
+          / hr
+        </span>
+      </div>
+    </label>
+  );
+}
+
+// Fat-finger guard: a rate >3× or <⅓ of the old one, or above $200/hr, gets
+// an explicit confirm. The server only validates nonnegative-int, so a typo
+// ($2400 for $24) would otherwise silently corrupt a whole payroll run.
+function confirmRateJump(
+  label: string,
+  oldCents: number | null,
+  newCents: number,
+): boolean {
+  const big =
+    (oldCents != null &&
+      oldCents > 0 &&
+      (newCents > oldCents * 3 || newCents * 3 < oldCents)) ||
+    newCents > 20000;
+  if (!big) return true;
+  const from = oldCents != null ? `$${(oldCents / 100).toFixed(2)}/hr` : '—';
+  return window.confirm(
+    `${label}: $${(newCents / 100).toFixed(2)}/hr is a large change from ${from}. Save anyway?`,
   );
 }
 
