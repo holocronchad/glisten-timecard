@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ShieldAlert, Mail, Clock as ClockIcon } from 'lucide-react';
+import { AlertTriangle, ShieldAlert, Mail, Clock as ClockIcon, HeartPulse } from 'lucide-react';
 import { api } from '../shared/api';
 import { useAuth } from './auth';
 import { formatTime } from '../shared/geo';
@@ -18,8 +18,19 @@ type BriefResponse = {
     medium: number;
     items: Array<{ user_id: number; user_name: string; date: string; severity: 'high' | 'medium' | 'low'; type: string; message: string }>;
   };
+  // Optional: a stale edge-cached SPA bundle could briefly hit a newer server,
+  // or vice-versa, mid-deploy. Consumers normalize via cprAttention() below.
+  cpr_attention?: {
+    count: number;
+    expired: number;
+    items: Array<{ user_id: number; name: string; days_until_expiry: number }>;
+  };
   period: { index: number; label: string };
 };
+
+function cprAttention(b: BriefResponse) {
+  return b.cpr_attention ?? { count: 0, expired: 0, items: [] };
+}
 
 type TodayResponse = {
   today: string;
@@ -216,7 +227,8 @@ function Brief({ brief }: { brief: BriefResponse }) {
   const hasUrgent =
     brief.pending_missed.count > 0 ||
     brief.period_anomalies.high > 0 ||
-    brief.failed_logins.count > 0;
+    brief.failed_logins.count > 0 ||
+    cprAttention(brief).count > 0;
 
   const headline = hasUrgent
     ? buildHeadlineParts(brief)
@@ -276,6 +288,17 @@ function Brief({ brief }: { brief: BriefResponse }) {
                   {brief.failed_logins.count > 1 ? 's' : ''}
                 </button>
               )}
+              {cprAttention(brief).count > 0 && (
+                <button
+                  onClick={() => nav('/manage/staff')}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-cream text-ink px-3 py-1.5 text-xs tracking-tight"
+                >
+                  <HeartPulse size={12} /> Review {cprAttention(brief).count} CPR
+                  {cprAttention(brief).expired > 0
+                    ? ` (${cprAttention(brief).expired} expired)`
+                    : ''}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -307,6 +330,22 @@ function buildHeadlineParts(b: BriefResponse): string {
   if (b.failed_logins.count > 0) {
     parts.push(
       `${b.failed_logins.count} failed PIN attempt${b.failed_logins.count > 1 ? 's' : ''} since you logged in`,
+    );
+  }
+  const cpr = cprAttention(b);
+  if (cpr.count > 0) {
+    const top = cpr.items[0];
+    const topPhrase = top
+      ? top.days_until_expiry < 0
+        ? `${top.name} expired ${Math.abs(top.days_until_expiry)}d ago`
+        : top.days_until_expiry === 0
+          ? `${top.name} expires today`
+          : `${top.name} ${top.days_until_expiry}d left`
+      : '';
+    parts.push(
+      `${cpr.count} CPR card${cpr.count > 1 ? 's' : ''} need attention` +
+        (cpr.expired > 0 ? ` (${cpr.expired} expired)` : '') +
+        (topPhrase ? ` — ${topPhrase}` : ''),
     );
   }
   return parts.join(' · ') + '.';

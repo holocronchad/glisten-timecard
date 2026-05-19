@@ -23,6 +23,7 @@ import {
   defaultLocationId,
 } from '../services/payPeriod';
 import { reviewDays } from '../services/anomalies';
+import { cprDaysUntil } from '../services/cpr';
 import { runAutoClose } from '../jobs/autoClose';
 import { config } from '../config';
 
@@ -346,12 +347,46 @@ router.get('/brief', async (req, res) => {
     return r !== 0 ? r : (a.date < b.date ? 1 : -1);
   });
 
+  // 5. CPR-card attention — the manager/owner mirror of the kiosk clock-in
+  // alert. Active staff WITH a cert on file whose card is expired or expiring
+  // within 30 days. Covers clinical non-hourly staff + owners too (a dentist's
+  // lapsed CPR card is exactly what an owner needs to know) — NOT scoped to
+  // track_hours. Permanent tester (role 'tester', Chad Hasic id=23) excluded
+  // so verification residue never pollutes the owner's brief. Same 30-day
+  // window + floor-day semantics as the kiosk (services/cpr.ts cprDaysUntil).
+  const { rows: cprRows } = await query<{
+    id: number;
+    name: string;
+    cpr_expires_at: Date | null;
+  }>(
+    `SELECT id, name, cpr_expires_at
+     FROM timeclock.users
+     WHERE active = true AND role <> 'tester' AND cpr_expires_at IS NOT NULL`,
+  );
+  const cprItems = cprRows
+    .map((u) => ({
+      user_id: u.id,
+      name: u.name,
+      days_until_expiry: cprDaysUntil(u.cpr_expires_at),
+    }))
+    .filter(
+      (i): i is { user_id: number; name: string; days_until_expiry: number } =>
+        i.days_until_expiry !== null && i.days_until_expiry <= 30,
+    )
+    // Most urgent first: already-expired (most negative) → soonest expiring.
+    .sort((a, b) => a.days_until_expiry - b.days_until_expiry);
+
   res.json({
     since: sinceTs.toISOString(),
     on_clock_count: onClock,
     pending_missed: {
       count: pendingMissed.length,
       items: pendingMissed.slice(0, 5), // top 5 oldest
+    },
+    cpr_attention: {
+      count: cprItems.length,
+      expired: cprItems.filter((i) => i.days_until_expiry < 0).length,
+      items: cprItems.slice(0, 8),
     },
     failed_logins: {
       count: failedLogins.length,
