@@ -19,6 +19,7 @@ import {
 } from '../shared/api';
 import { getCurrentPosition, geoPermissionState, greetingForHour, type GeoError } from '../shared/geo';
 import { vibrateError } from '../shared/feedback';
+import { cprClockInAlert } from '../shared/cprAlert';
 
 // Must match STORAGE_KEY in src/manage/auth.tsx so AuthProvider picks it up
 // when the kiosk routes a manager into /manage.
@@ -40,6 +41,10 @@ const IDLE_TIMEOUT_MS = 6000;
 const NAME_PHASE_TIMEOUT_MS = 90_000;
 const NAME_PHASE_WARN_AT_MS = 30_000;
 const CONFIRM_PHASE_TIMEOUT_MS = 6000;
+// A CPR-card expiry reminder needs longer than the standard 6s to actually
+// be read — give it 9s, but ONLY when the alert is showing (normal punches
+// keep the snappy 6s reset).
+const CONFIRM_PHASE_TIMEOUT_CPR_MS = 9000;
 
 export default function Kiosk() {
   const nav = useNavigate();
@@ -115,7 +120,12 @@ export default function Kiosk() {
 
   useEffect(() => {
     if (phase.kind === 'confirm') {
-      const t = setTimeout(reset, CONFIRM_PHASE_TIMEOUT_MS);
+      const hasCprAlert =
+        cprClockInAlert(phase.result.cpr, phase.result.punch.type) !== null;
+      const t = setTimeout(
+        reset,
+        hasCprAlert ? CONFIRM_PHASE_TIMEOUT_CPR_MS : CONFIRM_PHASE_TIMEOUT_MS,
+      );
       return () => clearTimeout(t);
     }
     if (phase.kind === 'name' && !anyModalOpen) {
@@ -455,6 +465,7 @@ export default function Kiosk() {
                   ts={phase.result.punch.ts}
                   name={phase.userName}
                   greeting={phase.result.message}
+                  cpr={phase.result.cpr}
                 />
               </motion.div>
             )}

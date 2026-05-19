@@ -793,6 +793,16 @@ router.post('/punch', async (req, res) => {
     location_id: outcome.locationId,
     pending_approval: !user.approved,
     remote_punch: usedRemotePin,
+    // Server-authoritative CPR snapshot so the kiosk can show a clock-in
+    // card-expiry reminder without trusting the (possibly stale) lookup copy.
+    // Same shape as /kiosk/lookup + /kiosk/me.
+    cpr: {
+      org: user.cpr_org,
+      issued_at: user.cpr_issued_at,
+      expires_at: user.cpr_expires_at,
+      updated_at: user.cpr_updated_at,
+      days_until_expiry: cprDaysUntil(user.cpr_expires_at),
+    },
   });
 });
 

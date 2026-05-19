@@ -135,6 +135,10 @@ export type PunchResponse = {
   message: string;
   location_id: number;
   pending_approval?: boolean;
+  // CPR snapshot, server-authoritative as of this punch. Used to surface the
+  // clock-in CPR-card expiry reminder on the confirmation screen. Optional so
+  // an older cached SPA bundle tolerates its absence.
+  cpr?: CprState;
 };
 
 export type RegisterSuggestion = {
