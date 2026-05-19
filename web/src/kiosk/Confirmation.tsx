@@ -128,7 +128,11 @@ export default function Confirmation({ type, ts, name, greeting, cpr }: Props) {
                     }`}
             </span>
             <span className="block text-creamSoft/60 text-xs tracking-tight mt-0.5">
-              {cpr?.expires_at ? `Expires ${cprDate(cpr.expires_at)}. ` : ''}
+              {cpr?.expires_at
+                ? `${alert.bucket === 'expired' ? 'Expired' : 'Expires'} ${cprDate(
+                    cpr.expires_at,
+                  )}. `
+                : ''}
               Renew it, then tap the CPR panel after your PIN to update — or see a manager.
             </span>
           </span>
