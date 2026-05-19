@@ -343,7 +343,7 @@ function buildHeadlineParts(b: BriefResponse): string {
           : `${top.name} ${top.days_until_expiry}d left`
       : '';
     parts.push(
-      `${cpr.count} CPR card${cpr.count > 1 ? 's' : ''} need attention` +
+      `${cpr.count} CPR card${cpr.count > 1 ? 's' : ''} need${cpr.count > 1 ? '' : 's'} attention` +
         (cpr.expired > 0 ? ` (${cpr.expired} expired)` : '') +
         (topPhrase ? ` — ${topPhrase}` : ''),
     );
