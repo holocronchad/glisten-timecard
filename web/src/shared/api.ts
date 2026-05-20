@@ -7,6 +7,13 @@ type FetchOpts = {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
   token?: string;
+  // Opt out of the built-in retry loop. Default IS retry: pre-response
+  // network failures get up to MAX_RETRIES retries with backoff. Caller can
+  // disable (e.g. a deliberate "is the server reachable" probe). Retry is
+  // safe for writes because the server-side punch path advisory-locks on
+  // (user, day) and the state machine rejects out-of-order duplicates with
+  // a clean 409 — see server/src/routes/kiosk.ts.
+  noRetry?: boolean;
 };
 
 export class ApiError extends Error {
@@ -37,33 +44,104 @@ export class NetworkError extends Error {
 
 export const AUTH_EXPIRED_EVENT = 'glisten:auth-expired';
 
+// Fired on `window` whenever the retry loop activates. UI components listen
+// (Kiosk.tsx) to render a "Reconnecting…" indicator without every caller
+// plumbing their own state.
+//   detail.phase: 'started' on first retry, 'attempt' on each subsequent,
+//                 'ended' once the loop resolves (success OR final failure)
+//   detail.attempt: 1-indexed retry number (omitted on 'ended')
+// Origin 2026-05-20: dental staff reported "finicky" timecard on wired
+// office LAN. Backend was healthy (nginx logs 200 OK for every request
+// that arrived), no SW to poison — diagnosis pointed at dropped packets
+// between office router and Cloudflare. Single-shot fetch made every
+// drop a user-visible "Connection failed." This loop swallows N transient
+// drops before bothering staff.
+export const API_RETRY_EVENT = 'glisten:api-retry';
+
+const MAX_RETRIES = 3;
+// Ramped backoff — first retry is fast (most transient drops resolve in
+// <500ms); later retries give the network real time to recover.
+const RETRY_DELAYS_MS = [400, 1000, 2200];
+// Per-attempt deadline. Pre-2026-05-20 the kiosk had no fetch timeout — a
+// stalled TCP connection would hang the spinner indefinitely until the
+// user tapped away. 8s is generous (P95 server latency is ~550ms) but
+// short enough that a stalled attempt can be cut and retried.
+const REQUEST_TIMEOUT_MS = 8000;
+
+function emitRetry(
+  phase: 'started' | 'attempt' | 'ended',
+  attempt?: number,
+): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(
+    new CustomEvent(API_RETRY_EVENT, { detail: { phase, attempt } }),
+  );
+}
+
 export async function api<T>(path: string, opts: FetchOpts = {}): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}${path}`, {
-      method: opts.method ?? 'GET',
-      headers: {
-        'content-type': 'application/json',
-        ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}),
-      },
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
-  } catch (e) {
+  const url = `${BASE}${path}`;
+  const init: RequestInit = {
+    method: opts.method ?? 'GET',
+    headers: {
+      'content-type': 'application/json',
+      ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}),
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  };
+
+  const maxAttempts = opts.noRetry ? 1 : 1 + MAX_RETRIES;
+  let res: Response | null = null;
+  let lastErr: unknown = null;
+  let notifiedStart = false;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    const ctl = new AbortController();
+    const deadline = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      res = await fetch(url, { ...init, signal: ctl.signal });
+      clearTimeout(deadline);
+      // Any HTTP response (incl. 5xx) means the request reached something
+      // that spoke HTTP — don't retry. 5xx propagates as ApiError where the
+      // caller can react meaningfully. Retrying 5xx would just pile load
+      // on a server that's already struggling.
+      break;
+    } catch (e) {
+      clearTimeout(deadline);
+      lastErr = e;
+      if (i >= maxAttempts - 1) break;
+      if (!notifiedStart) {
+        notifiedStart = true;
+        emitRetry('started', i + 1);
+      } else {
+        emitRetry('attempt', i + 1);
+      }
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[i] ?? 2200));
+    }
+  }
+
+  if (notifiedStart) emitRetry('ended');
+
+  if (!res) {
     const offline =
       typeof navigator !== 'undefined' && navigator.onLine === false;
     // eslint-disable-next-line no-console
-    console.warn('[api] fetch threw', { path, offline, err: e });
+    console.warn('[api] all attempts threw', {
+      path,
+      offline,
+      attempts: maxAttempts,
+      err: lastErr,
+    });
     if (offline) {
       throw new NetworkError(
         'offline',
         "You're offline — check WiFi and try again.",
-        e,
+        lastErr,
       );
     }
     throw new NetworkError(
       'fetch_failed',
       "Couldn't reach the timecard server — try again in a moment.",
-      e,
+      lastErr,
     );
   }
 

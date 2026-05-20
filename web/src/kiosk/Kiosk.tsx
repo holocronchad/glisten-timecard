@@ -11,6 +11,7 @@ import CloudBackground from './CloudBackground';
 import {
   api,
   ApiError,
+  API_RETRY_EVENT,
   NetworkError,
   EmployeeLookup,
   LookupResponse,
@@ -84,6 +85,24 @@ export default function Kiosk() {
     const t = setInterval(() => setNow(new Date()), 30_000);
     return () => clearInterval(t);
   }, [requestGps]);
+
+  // Surface api.ts retry loop activity to the user. Goal: when an office LAN
+  // drops a packet, staff see "connection slow, retrying" — they don't see
+  // a hard error and they don't think the app is dead. The retry loop in
+  // api.ts is what's actually saving the punch; this is just the indicator
+  // so they don't reflexively tap again and create a duplicate.
+  const [retrying, setRetrying] = useState<number | null>(null);
+  useEffect(() => {
+    const onRetry = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        phase: 'started' | 'attempt' | 'ended';
+        attempt?: number;
+      };
+      setRetrying(detail.phase === 'ended' ? null : detail.attempt ?? 1);
+    };
+    window.addEventListener(API_RETRY_EVENT, onRetry);
+    return () => window.removeEventListener(API_RETRY_EVENT, onRetry);
+  }, []);
 
   const [missedOpen, setMissedOpen] = useState(false);
   const [missedConfirm, setMissedConfirm] = useState(false);
@@ -536,6 +555,23 @@ export default function Kiosk() {
             className="fixed top-6 left-1/2 -translate-x-1/2 bg-cream text-ink rounded-full px-5 py-2.5 text-sm tracking-tight shadow-2xl z-40"
           >
             Request sent — a manager will review it.
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* api.ts retry-loop indicator. Shown only while the loop is active
+          (between 'started'/'attempt' and 'ended' events). z-50 so it sits
+          above the missedConfirm toast in the rare case both fire. */}
+      <AnimatePresence>
+        {retrying !== null && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-6 left-1/2 -translate-x-1/2 bg-amber-300/95 text-ink rounded-full px-4 py-2 text-sm tracking-tight shadow-2xl z-50 flex items-center gap-2.5"
+          >
+            <span className="inline-block w-2 h-2 rounded-full bg-ink animate-pulse" />
+            Connection slow — retrying…
           </motion.div>
         )}
       </AnimatePresence>
