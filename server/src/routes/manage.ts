@@ -450,6 +450,12 @@ router.get('/today', async (req, res) => {
     );
     const segments = buildSegments(today_punches);
     const minutes = totalMinutes(segments);
+    // Lunch-review deduction applied to TODAY's segments (migration 015).
+    // Surfaces to the manager dashboard as a "−30 min lunch" badge next
+    // to worked_minutes_today. Never returned on the employee-facing /me.
+    const lunchDeductionMin = segments
+      .filter((s) => s.paid)
+      .reduce((acc, s) => acc + s.lunch_review_deduction_minutes, 0);
     const last = userPunches[userPunches.length - 1] ?? null;
     const status = last
       ? last.type === 'clock_in' || last.type === 'lunch_end'
@@ -462,6 +468,7 @@ router.get('/today', async (req, res) => {
       user: u,
       status,
       worked_minutes_today: minutes,
+      lunch_deduction_today_minutes: lunchDeductionMin,
       last_punch: last
         ? {
             id: last.id,
@@ -748,6 +755,9 @@ router.get('/period', async (req, res) => {
     // Uses the shared helper so the lunch-review deduction (migration
     // 015) is honored in the same place as totalMinutes/totalsByDay.
     const { office: officeMinutes, wfh: wfhMinutes } = splitMinutes(segs);
+    const lunchDeductionMin = segs
+      .filter((s) => s.paid)
+      .reduce((acc, s) => acc + s.lunch_review_deduction_minutes, 0);
 
     const dayReviews = reviewDays({
       user: { id: u.id, name: u.name, home_location_id: homeLocByUser.get(u.id) ?? null },
@@ -773,6 +783,7 @@ router.get('/period', async (req, res) => {
       total_minutes: minutes,
       office_minutes: officeMinutes,
       wfh_minutes: wfhMinutes,
+      lunch_deduction_minutes: lunchDeductionMin,
       // Render the WFH pill in Period.tsx whenever the user has a separate
       // WFH rate, even on a period where they happened to only work one
       // bucket. Stays consistent with EmployeeDetail's rate_summary card.

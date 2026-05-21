@@ -39,6 +39,9 @@ type TodayResponse = {
     user: { id: number; name: string; role: string; approved: boolean; self_registered: boolean };
     status: 'on_clock' | 'on_lunch' | 'off';
     worked_minutes_today: number;
+    // Lunch-review deduction (migration 015) applied to today. Manager-side
+    // only — drives the "−30 min lunch" badge next to worked_minutes_today.
+    lunch_deduction_today_minutes?: number;
     last_punch: {
       id: number;
       type: string;
@@ -200,6 +203,14 @@ export default function Today() {
                 </div>
                 <div className="hidden sm:block text-creamSoft/60 text-sm tabular-nums w-20 text-right">
                   {hhmm(e.worked_minutes_today)}
+                  {(e.lunch_deduction_today_minutes ?? 0) > 0 && (
+                    <span
+                      className="block mt-0.5 inline-flex items-center rounded-full text-[9px] uppercase tracking-[0.14em] px-1.5 py-0.5 border text-rose-300 border-rose-300/30 bg-rose-300/10 tabular-nums"
+                      title={`Lunch review rejected — ${e.lunch_deduction_today_minutes} min deducted today.`}
+                    >
+                      −{e.lunch_deduction_today_minutes}m lunch
+                    </span>
+                  )}
                 </div>
                 <div className="hidden md:block text-creamSoft/40 text-xs tabular-nums w-24 text-right">
                   {e.last_punch ? formatTime(e.last_punch.ts) : '—'}

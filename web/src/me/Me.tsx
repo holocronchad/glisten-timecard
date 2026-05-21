@@ -10,7 +10,6 @@ import {
   totalsByDay,
   totalMinutes,
   splitMinutes,
-  totalDeductionMinutes,
   formatDateKey,
 } from '../shared/hours';
 import { punchTextClass } from '../shared/punchType';
@@ -24,12 +23,10 @@ type MeResponse = {
     type: PunchType;
     ts: string;
     flagged: boolean;
-    // Lunch-review fields surface to the employee so the deduction (if any)
-    // is visible on their own hours view — they should see the same -30 min
-    // reality Dr. Dawood sees, with an explanation rather than a silent gap.
-    lunch_review_status?: 'pending' | 'approved' | 'rejected' | null;
-    lunch_review_reason?: 'no_lunch' | 'short_lunch' | null;
-    lunch_review_deduction_seconds?: number | null;
+    // Per Dr. Dawood: lunch-review fields are deliberately NOT exposed to
+    // employees on /me. Server doesn't send them; UI doesn't render them;
+    // hours show raw (un-deducted) totals here so the employee can't infer
+    // a rejection by comparing /me to their paystub.
   }>;
 };
 
@@ -142,23 +139,13 @@ function Hours({
   onSignOut: () => void;
 }) {
   const first = data.user.name.split(' ')[0];
+  // /me intentionally never receives the lunch_review_deduction_seconds
+  // column from the server, so every segment is deduction=0 and totals
+  // here render as RAW worked time. Employees do not see deductions.
   const segments = buildSegments(data.punches);
   const dailyTotals = totalsByDay(segments);
   const weekTotalsMinutes = totalMinutesThisWeek(segments);
   const periodTotalMinutes = totalMinutes(segments);
-  const totalDeduction = totalDeductionMinutes(segments);
-  // Per-day deduction for the "By day" decoration. Bucketed by start-date
-  // in AZ — same convention as totalsByDay so the keys line up.
-  const deductionByDay = new Map<string, number>();
-  for (const s of segments) {
-    if (s.lunch_review_deduction_minutes > 0) {
-      const key = formatDateKey(s.start, 'America/Phoenix');
-      deductionByDay.set(
-        key,
-        (deductionByDay.get(key) ?? 0) + s.lunch_review_deduction_minutes,
-      );
-    }
-  }
   // Dual-PIN employees (Filza office+WFH) see an Office / WFH split under
   // each total. Single-PIN employees never see it (the breakdown collapses
   // to one bucket = same number twice, which would be noisy).
@@ -219,42 +206,24 @@ function Hours({
             <div className="p-6 text-creamSoft/50 text-sm">No hours yet.</div>
           ) : (
             <AnimatePresence>
-              {[...dailyTotals].reverse().map((d, i) => {
-                const deduction = deductionByDay.get(d.date) ?? 0;
-                return (
-                  <motion.div
-                    key={d.date}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.4, delay: Math.min(i * 0.04, 0.4) }}
-                    className="flex flex-col gap-1 p-4"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-creamSoft text-base">{prettyDate(d.date)}</span>
-                      <span className="text-cream tabular-nums tracking-tight text-base font-medium">
-                        {hhmm(d.worked_minutes)}
-                        {d.open && <span className="text-amber-300 ml-2 text-xs">(open)</span>}
-                      </span>
-                    </div>
-                    {deduction > 0 && (
-                      <div className="flex items-center justify-between text-rose-300/85 text-[11px] tabular-nums">
-                        <span>Lunch-break deduction (skipped lunch)</span>
-                        <span>−{hhmm(deduction)}</span>
-                      </div>
-                    )}
-                  </motion.div>
-                );
-              })}
+              {[...dailyTotals].reverse().map((d, i) => (
+                <motion.div
+                  key={d.date}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.4, delay: Math.min(i * 0.04, 0.4) }}
+                  className="flex items-center justify-between p-4"
+                >
+                  <span className="text-creamSoft text-base">{prettyDate(d.date)}</span>
+                  <span className="text-cream tabular-nums tracking-tight text-base font-medium">
+                    {hhmm(d.worked_minutes)}
+                    {d.open && <span className="text-amber-300 ml-2 text-xs">(open)</span>}
+                  </span>
+                </motion.div>
+              ))}
             </AnimatePresence>
           )}
         </div>
-        {totalDeduction > 0 && (
-          <p className="text-creamSoft/40 text-xs mt-2 leading-relaxed">
-            Lunch-break deductions reduce your paid time on shifts of 7+ hours
-            where lunch was skipped (or under 15 min) and not approved by your
-            manager. Reach out if you think a deduction was applied in error.
-          </p>
-        )}
 
         <h2 className="text-creamSoft/60 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
           Recent punches

@@ -42,7 +42,10 @@ type PeriodResponse = {
     // structure). Used to decide whether to show the WFH/Office split
     // pill row even on periods where they happened to only work one bucket.
     has_split_rate: boolean;
-    daily_totals: Array<{ date: string; worked_minutes: number; open: boolean }>;
+    daily_totals: Array<{ date: string; worked_minutes: number; open: boolean; deduction_minutes?: number }>;
+    // Sum of lunch-review deductions across the period (migration 015).
+    // Drives the "−30 min lunch" badge on the employee row. Manager-only.
+    lunch_deduction_minutes?: number;
     flagged_count: number;
     open_segments: number;
     day_reviews: DayReview[];
@@ -342,6 +345,11 @@ export default function Period() {
                   <div className="text-creamSoft/40 text-[11px] tabular-nums tracking-tight">
                     {decimalHours(e.total_minutes)} hrs
                   </div>
+                  {(e.lunch_deduction_minutes ?? 0) > 0 && (
+                    <div className="mt-1 inline-flex items-center rounded-full text-[10px] uppercase tracking-[0.14em] px-2 py-0.5 border text-rose-300 border-rose-300/30 bg-rose-300/10 tabular-nums">
+                      −{e.lunch_deduction_minutes}m lunch
+                    </div>
+                  )}
                   {/* Show office/WFH split only when employee actually has WFH hours
                       (otherwise it's just clutter — most staff have one rate). */}
                   {e.has_split_rate && (

@@ -346,6 +346,7 @@ export default function EmployeeDetail() {
               key={d.date}
               date={d.date}
               minutes={d.worked_minutes}
+              deductionMinutes={d.deduction_minutes ?? 0}
               segments={segments}
             />
           ))}
@@ -491,10 +492,16 @@ export default function EmployeeDetail() {
 function DayRow({
   date,
   minutes,
+  deductionMinutes,
   segments,
 }: {
   date: string;
   minutes: number;
+  // Lunch-review deduction minutes for this calendar day. When > 0, render
+  // a rose "−30 min lunch" badge so Dr. Dawood sees WHY the day's total is
+  // lower than the raw clock-in/out would suggest. Manager surface only —
+  // employees never see this.
+  deductionMinutes: number;
   segments: ReturnType<typeof buildSegments>;
 }) {
   const [y, m, d] = date.split('-').map(Number);
@@ -546,9 +553,19 @@ function DayRow({
             Off
           </span>
         ) : (
-          <span className="text-cream text-lg tabular-nums tracking-tight font-medium">
-            {hhmm(Math.round(minutes))}
-          </span>
+          <>
+            <span className="text-cream text-lg tabular-nums tracking-tight font-medium block">
+              {hhmm(Math.round(minutes))}
+            </span>
+            {deductionMinutes > 0 && (
+              <span
+                className="inline-flex items-center rounded-full text-[10px] uppercase tracking-[0.14em] px-2 py-0.5 border text-rose-300 border-rose-300/30 bg-rose-300/10 tabular-nums mt-0.5"
+                title={`Lunch review rejected — ${deductionMinutes} min deducted from this day's paid time.`}
+              >
+                −{deductionMinutes} min lunch
+              </span>
+            )}
+          </>
         )}
       </div>
 

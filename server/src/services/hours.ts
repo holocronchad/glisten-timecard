@@ -187,6 +187,11 @@ export interface DailyTotal {
   date: string; // yyyy-mm-dd in displayTz
   worked_minutes: number;
   open: boolean;
+  // Lunch-review deduction minutes applied to this day (migration 015).
+  // Non-zero only when a reviewed clock_out closed a segment that fell on
+  // this calendar day. Surfaces in the manager UI so Dr. Dawood can see
+  // WHY a day's total is lower than the raw punch-pair would suggest.
+  deduction_minutes: number;
 }
 
 // Net minutes for a single paid segment — raw duration minus the
@@ -202,8 +207,11 @@ export function totalsByDay(segments: Segment[], displayTz = 'America/Phoenix'):
     if (!s.paid) continue;
     const key = formatDate(s.start, displayTz);
     const minutes = paidMinutesOf(s);
-    const existing = buckets.get(key) ?? { date: key, worked_minutes: 0, open: false };
+    const existing =
+      buckets.get(key) ??
+      { date: key, worked_minutes: 0, open: false, deduction_minutes: 0 };
     existing.worked_minutes += minutes;
+    existing.deduction_minutes += s.lunch_review_deduction_minutes;
     if (s.open) existing.open = true;
     buckets.set(key, existing);
   }

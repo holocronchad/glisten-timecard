@@ -947,10 +947,16 @@ router.post('/me', async (req, res) => {
     ],
   ).catch(() => {});
 
+  // Employee self-service view: per Dr. Dawood (2026-05-20), do NOT leak
+  // any lunch-review fields here — employees should not see the deduction,
+  // not see that they were rejected, not see that their lunch was flagged.
+  // The column is deliberately omitted from the SELECT so the deduction
+  // never reaches the client, and buildSegments() on /me treats every
+  // segment as deduction=0 → /me shows RAW hours. Payroll math
+  // (manage routes + payroll CSV) still subtracts because those paths
+  // fetch the column explicitly.
   const { rows: punches } = await query(
-    `SELECT id, location_id, type, ts, flagged,
-            lunch_review_status, lunch_review_reason,
-            lunch_review_deduction_seconds
+    `SELECT id, location_id, type, ts, flagged
      FROM timeclock.punches
      WHERE user_id = $1 AND ts >= NOW() - INTERVAL '14 days'
      ORDER BY ts DESC`,

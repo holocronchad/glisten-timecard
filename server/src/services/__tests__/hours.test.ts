@@ -92,6 +92,7 @@ describe('totalsByDay (America/Phoenix)', () => {
       date: '2026-04-27',
       worked_minutes: 480,
       open: false,
+      deduction_minutes: 0,
     });
   });
 

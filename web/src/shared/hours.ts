@@ -125,6 +125,9 @@ export interface DailyTotal {
   date: string;
   worked_minutes: number;
   open: boolean;
+  // Lunch-review deduction minutes applied to this day (migration 015).
+  // Optional so older server responses still parse.
+  deduction_minutes?: number;
 }
 
 // Net minutes for one paid segment — raw duration minus lunch-review
@@ -143,8 +146,12 @@ export function totalsByDay(
     if (!s.paid) continue;
     const key = formatDateKey(s.start, displayTz);
     const minutes = paidMinutesOf(s);
-    const existing = buckets.get(key) ?? { date: key, worked_minutes: 0, open: false };
+    const existing =
+      buckets.get(key) ??
+      { date: key, worked_minutes: 0, open: false, deduction_minutes: 0 };
     existing.worked_minutes += minutes;
+    existing.deduction_minutes =
+      (existing.deduction_minutes ?? 0) + s.lunch_review_deduction_minutes;
     if (s.open) existing.open = true;
     buckets.set(key, existing);
   }

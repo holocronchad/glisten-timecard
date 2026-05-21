@@ -56,7 +56,7 @@ describe('web shared/hours', () => {
     ]);
     const totals = totalsByDay(segs);
     expect(totals).toEqual([
-      { date: '2026-04-27', worked_minutes: 480, open: false },
+      { date: '2026-04-27', worked_minutes: 480, open: false, deduction_minutes: 0 },
     ]);
   });
 
@@ -81,7 +81,7 @@ describe('web shared/hours', () => {
     const totals = totalsByDay(segs);
     // The whole 8h block is bucketed by `start`, which is 2026-04-27 in AZ
     expect(totals).toEqual([
-      { date: '2026-04-27', worked_minutes: 480, open: false },
+      { date: '2026-04-27', worked_minutes: 480, open: false, deduction_minutes: 0 },
     ]);
   });
 });
