@@ -726,7 +726,7 @@ function CprPill({
           : 'No CPR cert on file'
       }
     >
-      <ShieldCheck size={10} />
+      <ShieldCheck size={10} className={info.iconColor} />
       {info.label}
       {detail}
     </span>

@@ -11,18 +11,25 @@ export type CprInfo = {
   daysUntil: number | null;
   label: string;
   pillClass: string;
+  // Binary shield-icon color: green when the cert is good for more than 60d,
+  // red when missing / expired / ≤60d out ("about to expire"). Used on
+  // manager Staff list and EmployeeDetail card.
+  iconColor: string;
 };
 
 export function cprBucketFromExpiry(
   expiresAt: string | null,
   now: Date = new Date(),
 ): CprInfo {
+  const RED = 'text-rose-400';
+  const GREEN = 'text-emerald-400';
   if (!expiresAt) {
     return {
       bucket: 'missing',
       daysUntil: null,
       label: 'No CPR cert',
       pillClass: 'bg-creamSoft/5 text-creamSoft/60 border-creamSoft/15',
+      iconColor: RED,
     };
   }
   const expiry = new Date(expiresAt);
@@ -32,6 +39,7 @@ export function cprBucketFromExpiry(
       daysUntil: null,
       label: 'No CPR cert',
       pillClass: 'bg-creamSoft/5 text-creamSoft/60 border-creamSoft/15',
+      iconColor: RED,
     };
   }
   const days = Math.floor((expiry.getTime() - now.getTime()) / (24 * 60 * 60_000));
@@ -41,6 +49,7 @@ export function cprBucketFromExpiry(
       daysUntil: days,
       label: `CPR expired ${Math.abs(days)}d ago`,
       pillClass: 'bg-rose-950/40 text-rose-200 border-rose-300/30',
+      iconColor: RED,
     };
   }
   if (days <= 30) {
@@ -49,6 +58,7 @@ export function cprBucketFromExpiry(
       daysUntil: days,
       label: `CPR · ${days}d left`,
       pillClass: 'bg-amber-950/40 text-amber-200 border-amber-300/30',
+      iconColor: RED,
     };
   }
   if (days <= 60) {
@@ -57,6 +67,7 @@ export function cprBucketFromExpiry(
       daysUntil: days,
       label: `CPR · ${days}d left`,
       pillClass: 'bg-amber-950/20 text-amber-200/80 border-amber-300/15',
+      iconColor: RED,
     };
   }
   return {
@@ -64,6 +75,7 @@ export function cprBucketFromExpiry(
     daysUntil: days,
     label: `CPR · current`,
     pillClass: 'bg-emerald-950/30 text-emerald-200 border-emerald-300/25',
+    iconColor: GREEN,
   };
 }
 

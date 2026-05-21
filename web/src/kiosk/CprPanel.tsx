@@ -26,7 +26,7 @@ export default function CprPanel({ pin, cpr, onUpdated }: Props) {
         ].join(' ')}
       >
         <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-creamSoft/10">
-          <ShieldCheck size={18} />
+          <ShieldCheck size={18} className={status.iconColor} />
         </span>
         <span className="flex-1 min-w-0">
           <span className="block text-creamSoft text-sm tracking-tight">{status.label}</span>
@@ -56,14 +56,20 @@ export default function CprPanel({ pin, cpr, onUpdated }: Props) {
   );
 }
 
-type StatusInfo = { label: string; detail: string; tone: string };
+type StatusInfo = { label: string; detail: string; tone: string; iconColor: string };
 
 function cprStatus(cpr: CprState): StatusInfo {
+  // Binary shield color matches the manager-side rule in shared/cprStatus.ts:
+  // green only when cert is current (>60d to expiry); red for missing /
+  // expired / "about to expire" (≤60d).
+  const RED = 'text-rose-400';
+  const GREEN = 'text-emerald-400';
   if (!cpr.expires_at) {
     return {
       label: 'CPR cert — not on file',
       detail: 'Tap Add to record your current cert',
       tone: 'bg-creamSoft/5 border-creamSoft/15',
+      iconColor: RED,
     };
   }
   const days = cpr.days_until_expiry ?? Infinity;
@@ -73,6 +79,7 @@ function cprStatus(cpr: CprState): StatusInfo {
       label: `CPR expired ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago`,
       detail: `Cert from ${cpr.org ?? 'unknown org'} expired ${expiryStr}`,
       tone: 'bg-rose-950/30 border-rose-300/30',
+      iconColor: RED,
     };
   }
   if (days <= 30) {
@@ -80,6 +87,7 @@ function cprStatus(cpr: CprState): StatusInfo {
       label: `CPR expires in ${days} day${days === 1 ? '' : 's'}`,
       detail: `${cpr.org ?? 'CPR cert'} · expires ${expiryStr}`,
       tone: 'bg-amber-950/30 border-amber-300/30',
+      iconColor: RED,
     };
   }
   if (days <= 60) {
@@ -87,12 +95,14 @@ function cprStatus(cpr: CprState): StatusInfo {
       label: `CPR cert good for ${days} more days`,
       detail: `${cpr.org ?? 'CPR cert'} · expires ${expiryStr}`,
       tone: 'bg-amber-950/15 border-amber-300/15',
+      iconColor: RED,
     };
   }
   return {
     label: 'CPR cert current',
     detail: `${cpr.org ?? 'CPR cert'} · expires ${expiryStr}`,
     tone: 'bg-emerald-950/20 border-emerald-300/20',
+    iconColor: GREEN,
   };
 }
 

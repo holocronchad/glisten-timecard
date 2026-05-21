@@ -665,7 +665,7 @@ function CprCard({
       ].join(' ')}
     >
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-creamSoft/10">
-        <ShieldCheck size={20} />
+        <ShieldCheck size={20} className={info.iconColor} />
       </span>
       <div className="flex-1 min-w-0">
         <div className="text-creamSoft/40 text-[10px] tracking-[0.18em] uppercase">
