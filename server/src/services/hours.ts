@@ -16,6 +16,16 @@ export interface PunchLite {
   //   null   → WFH PIN (no geofence)
   // Required for rate-split payroll math.
   location_id?: number | null;
+  // Lunch-review deduction in seconds (migration 015). Lives on the
+  // clock_out punch row. When Dr. Dawood rejects a no-lunch / short-lunch
+  // shift from the manager queue, this becomes 1800 (30 min) — and that
+  // many minutes come off the paid segment closed by this punch. Approve
+  // or pending = 0. Carried onto Segment.lunch_review_deduction_minutes
+  // so every downstream consumer (totalMinutes / totalsByDay /
+  // splitMinutes / computeRateBreakdown) subtracts it automatically.
+  // (Anomaly scoring in reviewDays() deliberately uses RAW duration so
+  // a 12h shift still flags as long even after the deduction.)
+  lunch_review_deduction_seconds?: number | null;
 }
 
 export interface Segment {
@@ -31,6 +41,10 @@ export interface Segment {
   // Inherited from the clock_in punch that opened this segment.
   // null = WFH (paid at WFH rate); number = office id (paid at office rate).
   location_id: number | null;
+  // Pay deduction in minutes (migration 015). Non-zero only on the paid
+  // segment closed by a clock_out punch whose lunch review was rejected
+  // (30 min). All other segments are 0. See PunchLite comment above.
+  lunch_review_deduction_minutes: number;
 }
 
 const PAIR: Record<PunchType, PunchType> = {
@@ -53,6 +67,13 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
   let openIn: PunchLite | null = null;
   let openLunch: PunchLite | null = null;
 
+  // Convert the deduction-seconds field (on a clock_out punch) into the
+  // minute value that gets stamped on the matching paid Segment. Round
+  // to whole minutes — the same precision as totalMinutes/totalsByDay
+  // use throughout the rest of the app.
+  const deductionMinutesOf = (p: PunchLite): number =>
+    Math.max(0, Math.round((p.lunch_review_deduction_seconds ?? 0) / 60));
+
   for (const p of sorted) {
     if (p.type === 'clock_in') {
       // Close any prior open shift defensively (shouldn't happen with state machine)
@@ -68,6 +89,8 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           flagged: true,
           auto_closed: false,
           location_id: openIn.location_id ?? null,
+          // No clock_out closed this segment, so no review row exists → 0.
+          lunch_review_deduction_minutes: 0,
         });
       }
       openIn = p;
@@ -88,6 +111,9 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           // an employee who clocked in WFH and clocks out from the office still
           // gets paid the WFH rate for that segment.
           location_id: openIn.location_id ?? null,
+          // The clock_out punch is the row Dr. Dawood reviews. If she
+          // rejected its lunch review, deduct here (30 min by default).
+          lunch_review_deduction_minutes: deductionMinutesOf(p),
         });
         openIn = null;
       }
@@ -105,6 +131,9 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           flagged: false,
           auto_closed: false,
           location_id: openIn.location_id ?? null,
+          // Pre-lunch segment isn't the reviewed-shift closer; deduction lives
+          // on the clock_out segment instead.
+          lunch_review_deduction_minutes: 0,
         });
         openIn = null;
         openLunch = p;
@@ -124,6 +153,8 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           // Lunch is unpaid so location doesn't matter for pay; preserve the
           // rate context for any UI that wants to color the segment.
           location_id: openLunch.location_id ?? null,
+          // Unpaid segment — deduction is meaningless here (filter(paid) drops it).
+          lunch_review_deduction_minutes: 0,
         });
         openLunch = null;
       }
@@ -144,6 +175,8 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
       flagged: false,
       auto_closed: false,
       location_id: openIn.location_id ?? null,
+      // Still on the clock — no review has happened yet.
+      lunch_review_deduction_minutes: 0,
     });
   }
 
@@ -156,12 +189,19 @@ export interface DailyTotal {
   open: boolean;
 }
 
+// Net minutes for a single paid segment — raw duration minus the
+// lunch-review deduction (clamped to never go negative).
+function paidMinutesOf(s: Segment): number {
+  const raw = Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000));
+  return Math.max(0, raw - s.lunch_review_deduction_minutes);
+}
+
 export function totalsByDay(segments: Segment[], displayTz = 'America/Phoenix'): DailyTotal[] {
   const buckets = new Map<string, DailyTotal>();
   for (const s of segments) {
     if (!s.paid) continue;
     const key = formatDate(s.start, displayTz);
-    const minutes = Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000));
+    const minutes = paidMinutesOf(s);
     const existing = buckets.get(key) ?? { date: key, worked_minutes: 0, open: false };
     existing.worked_minutes += minutes;
     if (s.open) existing.open = true;
@@ -173,10 +213,22 @@ export function totalsByDay(segments: Segment[], displayTz = 'America/Phoenix'):
 export function totalMinutes(segments: Segment[]): number {
   return segments
     .filter((s) => s.paid)
-    .reduce(
-      (acc, s) => acc + Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000)),
-      0,
-    );
+    .reduce((acc, s) => acc + paidMinutesOf(s), 0);
+}
+
+// Office vs WFH split for a set of segments. Mirrors the inline math in
+// /manage/period and the web Me.tsx split — extracted so the lunch-review
+// deduction is honored once in shared code instead of duplicated.
+export function splitMinutes(segments: Segment[]): { office: number; wfh: number } {
+  let office = 0;
+  let wfh = 0;
+  for (const s of segments) {
+    if (!s.paid) continue;
+    const m = paidMinutesOf(s);
+    if (s.location_id == null) wfh += m;
+    else office += m;
+  }
+  return { office, wfh };
 }
 
 function formatDate(d: Date, tz: string): string {

@@ -4,6 +4,7 @@ import {
   totalsByDay,
   totalMinutes,
   splitMinutes,
+  totalDeductionMinutes,
   decimalHours,
   type PunchLite,
 } from '../hours';
@@ -13,8 +14,9 @@ function p(
   type: PunchLite['type'],
   iso: string,
   location_id: number | null = 1,
+  extra: Partial<PunchLite> = {},
 ): PunchLite {
-  return { id, type, ts: iso, location_id };
+  return { id, type, ts: iso, location_id, ...extra };
 }
 
 describe('web shared/hours', () => {
@@ -81,6 +83,52 @@ describe('web shared/hours', () => {
     expect(totals).toEqual([
       { date: '2026-04-27', worked_minutes: 480, open: false },
     ]);
+  });
+});
+
+describe('lunch_review_deduction (migration 015)', () => {
+  it('attaches deduction onto the segment closed by the reviewed clock_out', () => {
+    const segs = buildSegments([
+      p(1, 'clock_in', '2026-05-19T15:00:00Z'),
+      p(2, 'clock_out', '2026-05-19T23:30:00Z', 1, {
+        lunch_review_deduction_seconds: 1800,
+      }),
+    ]);
+    expect(segs[0].lunch_review_deduction_minutes).toBe(30);
+    expect(totalMinutes(segs)).toBe(510 - 30);
+    expect(totalsByDay(segs)[0].worked_minutes).toBe(480);
+    expect(totalDeductionMinutes(segs)).toBe(30);
+  });
+
+  it('approve (deduction=0) leaves the shift untouched', () => {
+    const segs = buildSegments([
+      p(1, 'clock_in', '2026-05-19T15:00:00Z'),
+      p(2, 'clock_out', '2026-05-19T23:30:00Z', 1, {
+        lunch_review_deduction_seconds: 0,
+      }),
+    ]);
+    expect(totalMinutes(segs)).toBe(510);
+    expect(totalDeductionMinutes(segs)).toBe(0);
+  });
+
+  it('splitMinutes pulls the deduction from the reviewed segment\'s own bucket', () => {
+    const segs = buildSegments([
+      p(1, 'clock_in', '2026-05-19T15:00:00Z', null), // WFH
+      p(2, 'clock_out', '2026-05-19T23:00:00Z', null, {
+        lunch_review_deduction_seconds: 1800,
+      }),
+    ]);
+    expect(splitMinutes(segs)).toEqual({ office: 0, wfh: 8 * 60 - 30 });
+  });
+
+  it('clamps to zero when deduction exceeds raw segment minutes', () => {
+    const segs = buildSegments([
+      p(1, 'clock_in', '2026-05-19T15:00:00Z'),
+      p(2, 'clock_out', '2026-05-19T15:20:00Z', 1, {
+        lunch_review_deduction_seconds: 1800,
+      }),
+    ]);
+    expect(totalMinutes(segs)).toBe(0);
   });
 });
 

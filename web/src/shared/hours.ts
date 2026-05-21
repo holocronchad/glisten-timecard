@@ -12,6 +12,10 @@ export interface PunchLite {
   // null = WFH PIN was used (no geofence). Required so the /me view can
   // split office-rate vs WFH-rate hours for dual-PIN employees like Filza.
   location_id?: number | null;
+  // Lunch-review deduction in seconds (migration 015). Set to 1800 (30 min)
+  // on a clock_out punch whose lunch review Dr. Dawood rejected — that
+  // many minutes come off this shift's paid time. Mirrors server PunchLite.
+  lunch_review_deduction_seconds?: number | null;
 }
 
 export interface Segment {
@@ -24,6 +28,10 @@ export interface Segment {
   // Matches server-side payroll bucket assignment: null → WFH rate,
   // non-null → office rate.
   location_id: number | null;
+  // Pay deduction in minutes (migration 015). Non-zero only on the paid
+  // segment closed by a rejected-lunch-review clock_out. Subtracted by
+  // totalMinutes / totalsByDay / splitMinutes.
+  lunch_review_deduction_minutes: number;
 }
 
 export function buildSegments(punches: PunchLite[], now: Date = new Date()): Segment[] {
@@ -36,6 +44,8 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
 
   const locOf = (p: PunchLite): number | null =>
     p.location_id === undefined ? null : p.location_id;
+  const deductionMinutesOf = (p: PunchLite): number =>
+    Math.max(0, Math.round((p.lunch_review_deduction_seconds ?? 0) / 60));
 
   for (const p of sorted) {
     if (p.type === 'clock_in') {
@@ -47,6 +57,7 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           open: false,
           flagged: true,
           location_id: locOf(openIn),
+          lunch_review_deduction_minutes: 0,
         });
       }
       openIn = p;
@@ -60,6 +71,8 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           open: false,
           flagged: !!p.flagged,
           location_id: locOf(openIn),
+          // Reviewed clock_out → 30 min off this segment on reject.
+          lunch_review_deduction_minutes: deductionMinutesOf(p),
         });
         openIn = null;
       }
@@ -72,6 +85,7 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           open: false,
           flagged: false,
           location_id: locOf(openIn),
+          lunch_review_deduction_minutes: 0,
         });
         openIn = null;
         openLunch = p;
@@ -85,6 +99,7 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
           open: false,
           flagged: false,
           location_id: locOf(openLunch),
+          lunch_review_deduction_minutes: 0,
         });
         openLunch = null;
       }
@@ -100,6 +115,7 @@ export function buildSegments(punches: PunchLite[], now: Date = new Date()): Seg
       open: true,
       flagged: false,
       location_id: locOf(openIn),
+      lunch_review_deduction_minutes: 0,
     });
   }
   return segments;
@@ -111,6 +127,13 @@ export interface DailyTotal {
   open: boolean;
 }
 
+// Net minutes for one paid segment — raw duration minus lunch-review
+// deduction (migration 015), clamped to never go negative.
+function paidMinutesOf(s: Segment): number {
+  const raw = Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000));
+  return Math.max(0, raw - s.lunch_review_deduction_minutes);
+}
+
 export function totalsByDay(
   segments: Segment[],
   displayTz = 'America/Phoenix',
@@ -119,7 +142,7 @@ export function totalsByDay(
   for (const s of segments) {
     if (!s.paid) continue;
     const key = formatDateKey(s.start, displayTz);
-    const minutes = Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000));
+    const minutes = paidMinutesOf(s);
     const existing = buckets.get(key) ?? { date: key, worked_minutes: 0, open: false };
     existing.worked_minutes += minutes;
     if (s.open) existing.open = true;
@@ -140,25 +163,32 @@ export function decimalHours(minutes: number): string {
 export function totalMinutes(segments: Segment[]): number {
   return segments
     .filter((s) => s.paid)
-    .reduce(
-      (acc, s) => acc + Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000)),
-      0,
-    );
+    .reduce((acc, s) => acc + paidMinutesOf(s), 0);
 }
 
 // Office vs WFH split for the running total. A segment with location_id===null
 // was opened via the WFH PIN (e.g. Filza's 0329); anything else is office.
-// Matches server-side payroll bucket rule in services/payroll.ts.
+// Matches server-side payroll bucket rule in services/payroll.ts. Honors
+// the lunch-review deduction via paidMinutesOf.
 export function splitMinutes(segments: Segment[]): { office: number; wfh: number } {
   let office = 0;
   let wfh = 0;
   for (const s of segments) {
     if (!s.paid) continue;
-    const m = Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000));
+    const m = paidMinutesOf(s);
     if (s.location_id === null) wfh += m;
     else office += m;
   }
   return { office, wfh };
+}
+
+// Total deduction across a set of segments — used by Me/Period views to
+// show employees "your hours include a 30-min lunch-review deduction"
+// when applicable.
+export function totalDeductionMinutes(segments: Segment[]): number {
+  return segments
+    .filter((s) => s.paid)
+    .reduce((acc, s) => acc + s.lunch_review_deduction_minutes, 0);
 }
 
 export function formatDateKey(d: Date, tz: string): string {

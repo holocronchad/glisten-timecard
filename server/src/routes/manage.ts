@@ -14,7 +14,7 @@ import {
   type PunchType,
   type PunchSource,
 } from '../services/punches';
-import { buildSegments, totalsByDay, totalMinutes } from '../services/hours';
+import { buildSegments, totalsByDay, totalMinutes, splitMinutes } from '../services/hours';
 import { payrollForPeriod, rowsToCsv, computeRateBreakdown } from '../services/payroll';
 import {
   periodForLocation,
@@ -213,10 +213,13 @@ router.get('/brief', async (req, res) => {
     [sinceTs],
   );
 
-  // 3. Currently-on-the-clock count (open paid segments today)
+  // 3. Currently-on-the-clock count (open paid segments today). Open-only
+  // check doesn't need the deduction column but fetching it keeps the
+  // PunchLite shape consistent with buildSegments expectations.
   const azNow = new Date();
   const { rows: todayPunches } = await query<any>(
-    `SELECT id, user_id, type, ts, location_id, flagged, auto_closed_at
+    `SELECT id, user_id, type, ts, location_id, flagged, auto_closed_at,
+            lunch_review_deduction_seconds
      FROM timeclock.punches
      WHERE ts >= NOW() - INTERVAL '36 hours'
      ORDER BY ts ASC`,
@@ -419,7 +422,8 @@ router.get('/today', async (req, res) => {
   );
 
   const { rows: punches } = await query<any>(
-    `SELECT id, user_id, location_id, type, ts, flagged, source
+    `SELECT id, user_id, location_id, type, ts, flagged, source,
+            lunch_review_deduction_seconds
      FROM timeclock.punches
      WHERE ts >= NOW() - INTERVAL '36 hours'
      ORDER BY ts ASC`,
@@ -684,7 +688,8 @@ router.get('/period', async (req, res) => {
     homeLocationId === null ? [] : [homeLocationId],
   );
   const { rows: punches } = await query<any>(
-    `SELECT id, user_id, type, ts, location_id, flagged, auto_closed_at
+    `SELECT id, user_id, type, ts, location_id, flagged, auto_closed_at,
+            lunch_review_deduction_seconds
      FROM timeclock.punches
      WHERE ts >= $1 AND ts < $2
      ORDER BY ts ASC`,
@@ -692,7 +697,10 @@ router.get('/period', async (req, res) => {
   );
 
   // Pull baselines (14 days before period start) + home_location_id + missed
-  // requests for anomaly scoring.
+  // requests for anomaly scoring. Baselines feed reviewDays which uses RAW
+  // segment duration (anomalies fire on physical reality, not adjusted pay),
+  // so the deduction column isn't needed here — but pulling it for parity
+  // keeps PunchLite-typed code paths uniform.
   const baselineStart = new Date(period.start.getTime() - 14 * 24 * 60 * 60_000);
   const userIds = users.map((u) => u.id);
   const { rows: userMeta } = await query<{ id: number; home_location_id: number | null }>(
@@ -702,7 +710,8 @@ router.get('/period', async (req, res) => {
   const homeLocByUser = new Map(userMeta.map((u) => [u.id, u.home_location_id]));
 
   const { rows: baselinePunches } = await query<any>(
-    `SELECT id, user_id, type, ts, location_id, flagged, auto_closed_at
+    `SELECT id, user_id, type, ts, location_id, flagged, auto_closed_at,
+            lunch_review_deduction_seconds
      FROM timeclock.punches
      WHERE user_id = ANY($1::int[]) AND ts >= $2 AND ts < $3
      ORDER BY ts ASC`,
@@ -736,14 +745,9 @@ router.get('/period', async (req, res) => {
 
     // Split worked minutes by rate bucket (location_id IS NULL = WFH PIN
     // → paid at WFH rate; numeric = office PIN → paid at office rate).
-    let officeMinutes = 0;
-    let wfhMinutes = 0;
-    for (const s of segs) {
-      if (!s.paid) continue;
-      const m = Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000));
-      if (s.location_id == null) wfhMinutes += m;
-      else officeMinutes += m;
-    }
+    // Uses the shared helper so the lunch-review deduction (migration
+    // 015) is honored in the same place as totalMinutes/totalsByDay.
+    const { office: officeMinutes, wfh: wfhMinutes } = splitMinutes(segs);
 
     const dayReviews = reviewDays({
       user: { id: u.id, name: u.name, home_location_id: homeLocByUser.get(u.id) ?? null },
@@ -1003,7 +1007,8 @@ router.get('/employees/:id', async (req, res) => {
   const { rows: punches } = await query(
     `SELECT p.id, p.location_id, l.name AS location_name, p.type, p.ts,
             p.source, p.flagged, p.flag_reason, p.geofence_pass, p.auto_closed_at,
-            p.no_lunch_reason
+            p.no_lunch_reason, p.lunch_review_status, p.lunch_review_reason,
+            p.lunch_review_deduction_seconds
      FROM timeclock.punches p
      LEFT JOIN timeclock.locations l ON l.id = p.location_id
      WHERE p.user_id = $1 AND p.ts >= $2 AND p.ts < $3
@@ -1394,7 +1399,8 @@ router.get('/lunch-reviews', async (req, res) => {
     SELECT p.id, p.user_id, u.name AS user_name, p.ts, p.location_id,
            p.no_lunch_reason, p.lunch_review_status, p.lunch_review_reason,
            p.lunch_review_minutes, p.lunch_reviewed_by, p.lunch_reviewed_at,
-           p.lunch_review_notes, decider.name AS reviewed_by_name
+           p.lunch_review_notes, p.lunch_review_deduction_seconds,
+           decider.name AS reviewed_by_name
     FROM timeclock.punches p
     JOIN timeclock.users u ON u.id = p.user_id
     LEFT JOIN timeclock.users decider ON decider.id = p.lunch_reviewed_by
@@ -1426,8 +1432,21 @@ router.get('/lunch-reviews', async (req, res) => {
 
 // ── POST /manage/lunch-reviews/:punchId ────────────────────────────────────
 // Dr. Dawood approves or rejects a flagged shift. Notes are optional.
-// Once decided, the row drops out of the pending queue but stays queryable
-// via ?status=all for the audit trail.
+//
+// Reject DEDUCTS 30 minutes (LUNCH_REVIEW_DEDUCTION_SECONDS) from this
+// shift's paid time — services/hours.ts carries the deduction onto the
+// matching paid Segment and every consumer (totalMinutes, totalsByDay,
+// splitMinutes, computeRateBreakdown) subtracts it. Approve keeps the
+// deduction at 0. This makes the queue a real payroll lever, not just a
+// records-only log (changed 2026-05-20 per Dr. Dawood).
+//
+// Re-decide is supported: she can flip approve↔reject on an already-
+// decided row. The deduction flips with the decision, and the audit_log
+// records both the prior status AND prior deduction so the trail shows
+// every change. (Prior version returned 409 on any already-decided row;
+// removed so she can change her mind.)
+const LUNCH_REVIEW_DEDUCTION_SECONDS = 1800; // 30 min
+
 const lunchReviewSchema = z.object({
   decision: z.enum(['approve', 'reject']),
   notes: z.string().max(1000).optional(),
@@ -1441,17 +1460,22 @@ router.post('/lunch-reviews/:punchId', async (req, res) => {
     return;
   }
   const newStatus = parsed.data.decision === 'approve' ? 'approved' : 'rejected';
+  const newDeduction =
+    parsed.data.decision === 'reject' ? LUNCH_REVIEW_DEDUCTION_SECONDS : 0;
 
   type Result =
-    | { ok: true; status: 'approved' | 'rejected' }
+    | { ok: true; status: 'approved' | 'rejected'; deduction_seconds: number }
     | { ok: false; httpStatus: number; error: string };
 
   const result = await withTransaction<Result>(async (client) => {
     const r = await client.query<{
       id: number;
       lunch_review_status: string | null;
+      lunch_review_deduction_seconds: number;
+      lunch_review_notes: string | null;
     }>(
-      `SELECT id, lunch_review_status
+      `SELECT id, lunch_review_status,
+              lunch_review_deduction_seconds, lunch_review_notes
        FROM timeclock.punches
        WHERE id = $1
        FOR UPDATE`,
@@ -1460,17 +1484,23 @@ router.post('/lunch-reviews/:punchId', async (req, res) => {
     if (r.rows.length === 0) {
       return { ok: false, httpStatus: 404, error: 'Not found' };
     }
-    if (r.rows[0].lunch_review_status !== 'pending') {
-      return { ok: false, httpStatus: 409, error: 'Not pending' };
+    // Only the punches that landed in the review queue are decidable —
+    // status must be non-null (one of pending/approved/rejected). A row
+    // with status=NULL was never flagged for review and shouldn't be a
+    // valid target.
+    const before = r.rows[0];
+    if (before.lunch_review_status === null) {
+      return { ok: false, httpStatus: 409, error: 'Not in review queue' };
     }
     await client.query(
       `UPDATE timeclock.punches
        SET lunch_review_status = $1,
            lunch_reviewed_by = $2,
            lunch_reviewed_at = NOW(),
-           lunch_review_notes = $3
-       WHERE id = $4`,
-      [newStatus, req.auth!.user_id, parsed.data.notes ?? null, punchId],
+           lunch_review_notes = $3,
+           lunch_review_deduction_seconds = $4
+       WHERE id = $5`,
+      [newStatus, req.auth!.user_id, parsed.data.notes ?? null, newDeduction, punchId],
     );
     await client.query(
       `INSERT INTO timeclock.audit_log
@@ -1480,23 +1510,32 @@ router.post('/lunch-reviews/:punchId', async (req, res) => {
         req.auth!.user_id,
         punchId,
         newStatus === 'approved' ? 'lunch_review_approve' : 'lunch_review_reject',
-        JSON.stringify({ lunch_review_status: 'pending' }),
+        JSON.stringify({
+          lunch_review_status: before.lunch_review_status,
+          lunch_review_deduction_seconds: before.lunch_review_deduction_seconds,
+          lunch_review_notes: before.lunch_review_notes,
+        }),
         JSON.stringify({
           lunch_review_status: newStatus,
+          lunch_review_deduction_seconds: newDeduction,
           lunch_reviewed_by: req.auth!.user_id,
           lunch_review_notes: parsed.data.notes ?? null,
         }),
         parsed.data.notes ?? `${newStatus} lunch review`,
       ],
     );
-    return { ok: true, status: newStatus };
+    return { ok: true, status: newStatus, deduction_seconds: newDeduction };
   });
 
   if (!result.ok) {
     res.status(result.httpStatus).json({ error: result.error });
     return;
   }
-  res.json({ ok: true, status: result.status });
+  res.json({
+    ok: true,
+    status: result.status,
+    deduction_seconds: result.deduction_seconds,
+  });
 });
 
 // ── GET /manage/staff (manager+) ───────────────────────────────────────────
@@ -1841,7 +1880,8 @@ router.get('/locations/:id', async (req, res) => {
   );
 
   const { rows: punches } = await query<any>(
-    `SELECT id, user_id, type, ts, location_id, flagged, auto_closed_at
+    `SELECT id, user_id, type, ts, location_id, flagged, auto_closed_at,
+            lunch_review_deduction_seconds
      FROM timeclock.punches
      WHERE user_id = ANY($1::int[]) AND ts >= $2 AND ts < $3
      ORDER BY ts ASC`,

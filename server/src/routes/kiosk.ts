@@ -948,7 +948,9 @@ router.post('/me', async (req, res) => {
   ).catch(() => {});
 
   const { rows: punches } = await query(
-    `SELECT id, location_id, type, ts, flagged
+    `SELECT id, location_id, type, ts, flagged,
+            lunch_review_status, lunch_review_reason,
+            lunch_review_deduction_seconds
      FROM timeclock.punches
      WHERE user_id = $1 AND ts >= NOW() - INTERVAL '14 days'
      ORDER BY ts DESC`,

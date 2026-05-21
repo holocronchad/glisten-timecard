@@ -19,6 +19,7 @@ type ReviewRow = {
   lunch_review_status: 'pending' | 'approved' | 'rejected';
   lunch_review_reason: 'no_lunch' | 'short_lunch';
   lunch_review_minutes: number | null;
+  lunch_review_deduction_seconds: number;
   lunch_reviewed_by: number | null;
   lunch_reviewed_at: string | null;
   lunch_review_notes: string | null;
@@ -67,7 +68,11 @@ export default function LunchReview() {
         token: token ?? undefined,
         body: { decision, notes: notes.length > 0 ? notes : undefined },
       });
-      toast(decision === 'approve' ? 'Approved.' : 'Rejected.');
+      toast(
+        decision === 'approve'
+          ? 'Approved — no deduction.'
+          : 'Rejected — 30 min deducted from this shift.',
+      );
       setNotesById((prev) => {
         const next = { ...prev };
         delete next[row.id];
@@ -87,8 +92,10 @@ export default function LunchReview() {
         <span className="font-serif italic text-cream">Lunch</span> review
       </h1>
       <p className="text-creamSoft/40 text-sm mt-1">
-        Shifts of 7+ hours where lunch was skipped or under 15 minutes. Approve
-        or reject each one — payroll is unaffected, this is for your records.
+        Shifts of 7+ hours where lunch was skipped or under 15 minutes.{' '}
+        <span className="text-creamSoft/70">Approve</span> keeps the full shift
+        paid; <span className="text-creamSoft/70">Reject</span> deducts 30 min
+        from this shift's paid time.
       </p>
 
       <h2 className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase mt-8 mb-3">
@@ -188,57 +195,80 @@ export default function LunchReview() {
             Recently decided
           </h2>
           <div className="rounded-3xl border border-creamSoft/10 bg-graphite/40 divide-y divide-creamSoft/5">
-            {decided.map((d) => (
-              <div
-                key={d.id}
-                className="p-5 flex flex-col sm:flex-row sm:items-center gap-4"
-              >
-                <span
-                  className={[
-                    'rounded-full text-[10px] uppercase tracking-[0.18em] px-2 py-0.5 border shrink-0',
-                    d.lunch_review_status === 'approved'
-                      ? 'text-emerald-300 border-emerald-300/20 bg-emerald-300/10'
-                      : 'text-creamSoft/40 border-creamSoft/10',
-                  ].join(' ')}
+            {decided.map((d) => {
+              const deductionMin = Math.round((d.lunch_review_deduction_seconds ?? 0) / 60);
+              const isRejected = d.lunch_review_status === 'rejected';
+              return (
+                <div
+                  key={d.id}
+                  className="p-5 flex flex-col sm:flex-row sm:items-center gap-4"
                 >
-                  {d.lunch_review_status}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-creamSoft text-sm tracking-tight">
-                    {d.user_name}
-                    <span className="text-creamSoft/40 ml-2 text-xs">
-                      ·{' '}
-                      {d.lunch_review_reason === 'no_lunch'
-                        ? 'No lunch'
-                        : `Short · ${d.lunch_review_minutes ?? 0} min`}
-                    </span>
-                  </div>
-                  <div className="text-sm mt-0.5">
-                    <span className="text-creamSoft/60 tabular-nums">
-                      {formatDateTime(d.ts)}
-                    </span>
-                  </div>
-                  {d.no_lunch_reason && (
-                    <div className="text-creamSoft/50 text-xs mt-1 italic truncate">
-                      "{d.no_lunch_reason}"
+                  <span
+                    className={[
+                      'rounded-full text-[10px] uppercase tracking-[0.18em] px-2 py-0.5 border shrink-0',
+                      d.lunch_review_status === 'approved'
+                        ? 'text-emerald-300 border-emerald-300/20 bg-emerald-300/10'
+                        : 'text-rose-300 border-rose-300/30 bg-rose-300/10',
+                    ].join(' ')}
+                  >
+                    {d.lunch_review_status}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-creamSoft text-sm tracking-tight">
+                      {d.user_name}
+                      <span className="text-creamSoft/40 ml-2 text-xs">
+                        ·{' '}
+                        {d.lunch_review_reason === 'no_lunch'
+                          ? 'No lunch'
+                          : `Short · ${d.lunch_review_minutes ?? 0} min`}
+                      </span>
+                      {isRejected && deductionMin > 0 && (
+                        <span className="ml-2 inline-flex items-center rounded-full text-[10px] uppercase tracking-[0.18em] px-2 py-0.5 border text-rose-300 border-rose-300/30 bg-rose-300/10 tabular-nums">
+                          −{deductionMin} min
+                        </span>
+                      )}
                     </div>
-                  )}
-                  {d.lunch_review_notes && (
-                    <div className="text-creamSoft/40 text-xs mt-1">
-                      Notes: {d.lunch_review_notes}
+                    <div className="text-sm mt-0.5">
+                      <span className="text-creamSoft/60 tabular-nums">
+                        {formatDateTime(d.ts)}
+                      </span>
                     </div>
-                  )}
+                    {d.no_lunch_reason && (
+                      <div className="text-creamSoft/50 text-xs mt-1 italic truncate">
+                        "{d.no_lunch_reason}"
+                      </div>
+                    )}
+                    {d.lunch_review_notes && (
+                      <div className="text-creamSoft/40 text-xs mt-1">
+                        Notes: {d.lunch_review_notes}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-2 shrink-0">
+                    <div className="text-creamSoft/40 text-xs tabular-nums whitespace-nowrap text-right">
+                      {d.lunch_reviewed_at && formatDateTime(d.lunch_reviewed_at)}
+                      {d.reviewed_by_name && (
+                        <span className="block text-[10px] text-creamSoft/30">
+                          by {d.reviewed_by_name}
+                        </span>
+                      )}
+                    </div>
+                    {/* Change-decision: flip approve↔reject. Server accepts
+                        re-decide on already-decided rows; deduction follows
+                        the new status. */}
+                    <button
+                      disabled={busyId === d.id}
+                      onClick={() =>
+                        decide(d, isRejected ? 'approve' : 'reject')
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-full border border-creamSoft/10 hover:bg-creamSoft/5 text-creamSoft/60 hover:text-creamSoft px-3 py-1 text-[11px] tracking-tight disabled:opacity-50"
+                    >
+                      Change to {isRejected ? 'Approve' : 'Reject'}
+                    </button>
+                  </div>
                 </div>
-                <div className="text-creamSoft/40 text-xs tabular-nums whitespace-nowrap">
-                  {d.lunch_reviewed_at && formatDateTime(d.lunch_reviewed_at)}
-                  {d.reviewed_by_name && (
-                    <span className="block text-[10px] text-creamSoft/30">
-                      by {d.reviewed_by_name}
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </>
       )}

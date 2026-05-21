@@ -96,7 +96,15 @@ export interface RateBreakdown {
 }
 
 export function computeRateBreakdown(
-  segments: Array<{ start: Date; end: Date; paid: boolean; location_id: number | null }>,
+  segments: Array<{
+    start: Date;
+    end: Date;
+    paid: boolean;
+    location_id: number | null;
+    // Optional so non-buildSegments callers (legacy/test fixtures) don't
+    // have to set it — treated as 0 when absent.
+    lunch_review_deduction_minutes?: number;
+  }>,
   employmentType: string,
   officeRateCents: number,
   wfhRateCents: number,
@@ -107,7 +115,12 @@ export function computeRateBreakdown(
   const weekly = new Map<string, WeekBucket>();
   for (const s of segments) {
     if (!s.paid) continue;
-    const minutes = Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000));
+    const raw = Math.max(0, Math.round((s.end.getTime() - s.start.getTime()) / 60000));
+    // Net minutes after lunch-review deduction (migration 015). Deduction
+    // applies to the segment's own bucket — a rejected no-lunch shift
+    // closed by a WFH-PIN clock_out only hits the WFH bucket, etc.
+    const deduction = s.lunch_review_deduction_minutes ?? 0;
+    const minutes = Math.max(0, raw - deduction);
     const wk = weekKey(s.start, tz);
     if (!weekly.has(wk)) weekly.set(wk, { office: 0, wfh: 0 });
     const b = weekly.get(wk)!;
@@ -183,9 +196,12 @@ export async function payrollForPeriod(
     homeLocationId === null ? [] : [homeLocationId],
   );
 
-  // Pull location_id on each punch so rate bucketing works downstream.
+  // Pull location_id + lunch_review_deduction_seconds on each punch so rate
+  // bucketing AND the lunch-review deduction (migration 015) both flow into
+  // buildSegments → computeRateBreakdown.
   const { rows: punches } = await query<PunchLite & { ts: Date; location_id: number | null }>(
-    `SELECT id, user_id, type, ts, location_id, flagged, auto_closed_at
+    `SELECT id, user_id, type, ts, location_id, flagged, auto_closed_at,
+            lunch_review_deduction_seconds
      FROM timeclock.punches
      WHERE ts >= $1 AND ts < $2
      ORDER BY ts ASC`,
