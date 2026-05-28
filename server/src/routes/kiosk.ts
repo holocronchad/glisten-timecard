@@ -11,7 +11,9 @@ import bcrypt from 'bcrypt';
 import { z } from 'zod';
 import { findUserByPin, hashPin } from '../auth/pin';
 import { signManagerToken } from '../auth/jwt';
+import { clientIp } from '../auth/clientIp';
 import { matchLocation } from '../services/geofence';
+import { matchLocationByIp } from '../services/kioskIpAllowlist';
 import {
   getLatestPunch, nextAllowedPunches, recordPunch,
   shiftRequiresLunchAttestation, LUNCH_ATTESTATION_THRESHOLD_HOURS,
@@ -542,10 +544,7 @@ router.post('/punch', async (req, res) => {
     return;
   }
 
-  const ip =
-    (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-    req.ip ||
-    null;
+  const ip = clientIp(req);
 
   // The whole critical section runs inside one transaction with a per-user
   // advisory lock, so two rapid double-tapped requests from the same user
@@ -596,17 +595,22 @@ router.post('/punch', async (req, res) => {
       latest = await getLatestPunch(user.id, client);
     }
 
-    // Geofence resolution. Three paths:
+    // Geofence resolution. Four paths, tried in descending precision:
     //   1. Remote PIN → no geofence, no location.
-    //   2. Inside a known office geofence → tie punch to that office.
-    //   3. Outside geofence on a NON-clock_in punch where the previous
+    //   2. Inside a known office geofence (GPS) → tie punch to that
+    //      office (most precise — clean punch, not flagged).
+    //   3. Client IP sits inside an office's kiosk_ip_cidrs allowlist
+    //      (migration 016) → office WiFi is strong physical-presence
+    //      evidence (an attacker cannot spoof originating from the
+    //      office router). Applies to ALL punch types, including
+    //      clock_in — the anti-fraud boundary that mid-shift relaxation
+    //      preserves is satisfied here too. Flagged for audit.
+    //   4. Outside geofence on a NON-clock_in punch where the previous
     //      punch was at a known office within the last 12 hours → allow,
-    //      flag for review, inherit the previous location_id. This
-    //      unblocks the common failure where WiFi-based geolocation drifts
-    //      past the 150m radius right when the employee is mid-shift
-    //      transitioning (start lunch, end lunch, clock out). clock_in
-    //      stays strict — that's the anti-fraud boundary, can't allow it
-    //      from anywhere.
+    //      flag, inherit the previous location_id. Last-resort fallback
+    //      for the WiFi-geolocation-drift case when no IP allowlist
+    //      entry exists. clock_in stays strict here because mid-shift
+    //      inheritance can't justify a new shift start.
     let officeId: number | null = null;
     let geofenceFlagged = false;
     let geofenceFlagReason: string | null = null;
@@ -629,40 +633,54 @@ router.post('/punch', async (req, res) => {
         };
       }
       const locRes = await client.query(
-        `SELECT id, lat, lng, geofence_m, active FROM timeclock.locations WHERE active = true`,
+        `SELECT id, lat, lng, geofence_m, active, kiosk_ip_cidrs
+           FROM timeclock.locations
+          WHERE active = true
+          ORDER BY id`,
       );
-      const office = matchLocation({ lat, lng }, locRes.rows as any);
+      const locations = locRes.rows as any[];
+      const office = matchLocation({ lat, lng }, locations);
       if (office) {
         officeId = office.id;
       } else {
-        const previousOpens: Record<string, PunchType[]> = {
-          lunch_end:   ['lunch_start'],
-          lunch_start: ['clock_in', 'lunch_end'],
-          clock_out:   ['clock_in', 'lunch_end'],
-        };
-        const eligibleOpens = previousOpens[type] ?? [];
-        const isMidShift = type !== 'clock_in';
-        const canRelax =
-          isMidShift &&
-          latest != null &&
-          eligibleOpens.includes(latest.type) &&
-          latest.location_id != null &&
-          Date.now() - new Date(latest.ts).getTime() < 12 * 60 * 60 * 1000;
-
-        if (canRelax && latest && latest.location_id != null) {
-          officeId = latest.location_id;
+        // Path 3: kiosk IP allowlist.
+        const ipMatch = matchLocationByIp(ip, locations);
+        if (ipMatch) {
+          officeId = ipMatch.id;
           geofenceFlagged = true;
           geofenceFlagReason =
-            `GPS reported outside office geofence at ${type}; auto-allowed because ${latest.type} was recorded at this location ${new Date(latest.ts).toISOString()}.`;
+            `ip_allowlist: client IP ${ip ?? 'unknown'} matched office ${ipMatch.id} kiosk allowlist (GPS at ${type} was outside fence).`;
         } else {
-          return {
-            kind: 'error',
-            status: 403,
-            body: {
-              error: 'Outside office',
-              message: 'You can only punch when you are at a Glisten Dental office.',
-            },
+          // Path 4: mid-shift relaxation (last-resort).
+          const previousOpens: Record<string, PunchType[]> = {
+            lunch_end:   ['lunch_start'],
+            lunch_start: ['clock_in', 'lunch_end'],
+            clock_out:   ['clock_in', 'lunch_end'],
           };
+          const eligibleOpens = previousOpens[type] ?? [];
+          const isMidShift = type !== 'clock_in';
+          const canRelax =
+            isMidShift &&
+            latest != null &&
+            eligibleOpens.includes(latest.type) &&
+            latest.location_id != null &&
+            Date.now() - new Date(latest.ts).getTime() < 12 * 60 * 60 * 1000;
+
+          if (canRelax && latest && latest.location_id != null) {
+            officeId = latest.location_id;
+            geofenceFlagged = true;
+            geofenceFlagReason =
+              `GPS reported outside office geofence at ${type}; auto-allowed because ${latest.type} was recorded at this location ${new Date(latest.ts).toISOString()}.`;
+          } else {
+            return {
+              kind: 'error',
+              status: 403,
+              body: {
+                error: 'Outside office',
+                message: 'You can only punch when you are at a Glisten Dental office.',
+              },
+            };
+          }
         }
       }
     }
