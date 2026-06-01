@@ -28,6 +28,10 @@ export interface UserRow {
   // (separate WFH rate). Read by the kiosk to flag every primary-PIN punch
   // for manager review (rate-arbitrage safeguard).
   pay_rate_cents_remote: number | null;
+  // true = owner-vouched, skip the primary-PIN monitor for this user so
+  // their clean in-office punches don't flood the review queue (migration
+  // 017). Default false → a dual-rate user is monitored.
+  primary_pin_monitor_exempt: boolean;
 }
 
 export type PinResult =
@@ -54,7 +58,7 @@ export async function findUserByPin(pin: string): Promise<PinResult> {
             is_owner, is_manager, track_hours, active, approved,
             cpr_org, cpr_issued_at, cpr_expires_at, cpr_updated_at,
             pin_locked_until, pin_fail_count, pin_fail_window_start,
-            pay_rate_cents_remote
+            pay_rate_cents_remote, primary_pin_monitor_exempt
      FROM timeclock.users
      WHERE active = true
        AND (pin_hash IS NOT NULL OR pin_hash_remote IS NOT NULL)`

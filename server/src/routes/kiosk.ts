@@ -13,6 +13,7 @@ import { findUserByPin, hashPin } from '../auth/pin';
 import { signManagerToken } from '../auth/jwt';
 import { clientIp } from '../auth/clientIp';
 import { matchLocation } from '../services/geofence';
+import { primaryPinMonitor } from '../services/primaryPinMonitor';
 import { matchLocationByIp } from '../services/kioskIpAllowlist';
 import {
   getLatestPunch, nextAllowedPunches, recordPunch,
@@ -699,23 +700,15 @@ router.post('/punch', async (req, res) => {
       };
     }
 
-    // Primary-PIN monitor (added 2026-04-29 for Filza, generalized
-    // 2026-05-04). Any user with a separate WFH rate
-    // (pay_rate_cents_remote IS NOT NULL) has a rate-arbitrage incentive:
-    // they could RDP into an office PC from home and use their primary PIN
-    // there — that punch would pass the geofence check (the office PC's
-    // browser geolocates inside the office) AND record location_id=office,
-    // claiming the in-office rate from home. We can't detect that scenario
-    // server-side perfectly, so we surface it for review: every primary-
-    // PIN punch from a dual-rate user gets flagged so Dr. Dawood sees it
-    // in the manager queue and can corroborate against the schedule.
-    const isDualRate = user.pay_rate_cents_remote != null;
-    let monitorFlagged = false;
-    let monitorFlagReason: string | null = null;
-    if (isDualRate && !usedRemotePin) {
-      monitorFlagged = true;
-      monitorFlagReason = `primary_pin_review: ${user.name.split(' ')[0]} (in-office punch — verify vs WFH).`;
-    }
+    // Primary-PIN monitor (rate-arbitrage safeguard for dual-rate staff).
+    // Flags every in-office primary-PIN punch from a dual-rate user so the
+    // manager can corroborate against the schedule — UNLESS the user is
+    // owner-vouched (primary_pin_monitor_exempt, migration 017), which stops
+    // a trusted staffer's clean punches from flooding the review queue.
+    // See services/primaryPinMonitor.ts for the full rationale + tradeoff.
+    const monitor = primaryPinMonitor(user, usedRemotePin);
+    const monitorFlagged = monitor.flagged;
+    const monitorFlagReason = monitor.reason;
 
     const finalFlagged = geofenceFlagged || monitorFlagged;
     const finalFlagReason = [geofenceFlagReason, monitorFlagReason]
