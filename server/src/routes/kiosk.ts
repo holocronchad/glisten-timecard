@@ -15,6 +15,7 @@ import { clientIp } from '../auth/clientIp';
 import { matchLocation } from '../services/geofence';
 import { primaryPinMonitor } from '../services/primaryPinMonitor';
 import { matchLocationByIp } from '../services/kioskIpAllowlist';
+import { resolveKioskGeofence } from '../services/kioskGeofence';
 import {
   getLatestPunch, nextAllowedPunches, recordPunch,
   shiftRequiresLunchAttestation, LUNCH_ATTESTATION_THRESHOLD_HOURS,
@@ -619,20 +620,6 @@ router.post('/punch', async (req, res) => {
     if (usedRemotePin) {
       officeId = null;
     } else {
-      // Geofence-required PIN: lat/lng are mandatory. WFH PINs above made
-      // them optional in the schema; if a non-WFH user reaches here
-      // without coords we hard-fail (vs. silently flag/inherit, which
-      // would let anyone bypass geofence by stripping coords client-side).
-      if (typeof lat !== 'number' || typeof lng !== 'number') {
-        return {
-          kind: 'error',
-          status: 400,
-          body: {
-            error: 'Location required',
-            message: 'Allow location in your browser, then try again.',
-          },
-        };
-      }
       const locRes = await client.query(
         `SELECT id, lat, lng, geofence_m, active, kiosk_ip_cidrs
            FROM timeclock.locations
@@ -640,50 +627,56 @@ router.post('/punch', async (req, res) => {
           ORDER BY id`,
       );
       const locations = locRes.rows as any[];
-      const office = matchLocation({ lat, lng }, locations);
-      if (office) {
-        officeId = office.id;
-      } else {
-        // Path 3: kiosk IP allowlist.
-        const ipMatch = matchLocationByIp(ip, locations);
-        if (ipMatch) {
-          officeId = ipMatch.id;
-          geofenceFlagged = true;
-          geofenceFlagReason =
-            `ip_allowlist: client IP ${ip ?? 'unknown'} matched office ${ipMatch.id} kiosk allowlist (GPS at ${type} was outside fence).`;
-        } else {
-          // Path 4: mid-shift relaxation (last-resort).
-          const previousOpens: Record<string, PunchType[]> = {
-            lunch_end:   ['lunch_start'],
-            lunch_start: ['clock_in', 'lunch_end'],
-            clock_out:   ['clock_in', 'lunch_end'],
-          };
-          const eligibleOpens = previousOpens[type] ?? [];
-          const isMidShift = type !== 'clock_in';
-          const canRelax =
-            isMidShift &&
-            latest != null &&
-            eligibleOpens.includes(latest.type) &&
-            latest.location_id != null &&
-            Date.now() - new Date(latest.ts).getTime() < 12 * 60 * 60 * 1000;
 
-          if (canRelax && latest && latest.location_id != null) {
-            officeId = latest.location_id;
-            geofenceFlagged = true;
-            geofenceFlagReason =
-              `GPS reported outside office geofence at ${type}; auto-allowed because ${latest.type} was recorded at this location ${new Date(latest.ts).toISOString()}.`;
-          } else {
-            return {
-              kind: 'error',
-              status: 403,
-              body: {
-                error: 'Outside office',
-                message: 'You can only punch when you are at a Glisten Dental office.',
-              },
-            };
-          }
-        }
+      // Signals for the pure resolver. matchLocationByIp is cheap + pure, so we
+      // compute it unconditionally; the resolver only consults it when GPS misses.
+      const hasCoords = typeof lat === 'number' && typeof lng === 'number';
+      const gpsOffice =
+        typeof lat === 'number' && typeof lng === 'number'
+          ? matchLocation({ lat, lng }, locations)
+          : null;
+      const ipMatch = matchLocationByIp(ip, locations);
+
+      // Mid-shift relaxation eligibility (non-clock_in whose prior open was at a
+      // known office < 12h ago). resolveKioskGeofence only reaches this when
+      // coords were present, preserving the original no-coords behaviour.
+      const previousOpens: Record<string, PunchType[]> = {
+        lunch_end:   ['lunch_start'],
+        lunch_start: ['clock_in', 'lunch_end'],
+        clock_out:   ['clock_in', 'lunch_end'],
+      };
+      const eligibleOpens = previousOpens[type] ?? [];
+      const canRelax =
+        type !== 'clock_in' &&
+        latest != null &&
+        eligibleOpens.includes(latest.type) &&
+        latest.location_id != null &&
+        Date.now() - new Date(latest.ts).getTime() < 12 * 60 * 60 * 1000;
+
+      const resolution = resolveKioskGeofence({
+        punchType: type as PunchType,
+        hasCoords,
+        gpsOfficeId: gpsOffice ? gpsOffice.id : null,
+        ipMatchOfficeId: ipMatch ? ipMatch.id : null,
+        clientIp: ip,
+        relax: {
+          ok: !!canRelax,
+          locationId: canRelax && latest ? latest.location_id : null,
+          priorType: canRelax && latest ? latest.type : null,
+          priorTsIso: canRelax && latest ? new Date(latest.ts).toISOString() : null,
+        },
+      });
+
+      if (resolution.kind === 'reject') {
+        return {
+          kind: 'error',
+          status: resolution.status,
+          body: { error: resolution.error, message: resolution.message },
+        };
       }
+      officeId = resolution.officeId;
+      geofenceFlagged = resolution.flagged;
+      geofenceFlagReason = resolution.reason;
     }
 
     const allowed = nextAllowedPunches(latest);
