@@ -24,6 +24,7 @@ import {
 } from '../services/payPeriod';
 import { reviewDays } from '../services/anomalies';
 import { cprDaysUntil } from '../services/cpr';
+import { isOwnPunch, SELF_PUNCH_BLOCKED_MESSAGE } from '../services/punchGuard';
 import { runAutoClose } from '../jobs/autoClose';
 import { config } from '../config';
 
@@ -1128,6 +1129,11 @@ router.patch('/punches/:id', async (req, res) => {
     if (before.rowCount === 0) {
       return { ok: false, status: 404, error: 'Not found' };
     }
+    // Segregation of duties: a manager/owner may correct anyone's punches but
+    // never their own. (See punchGuard.ts.)
+    if (isOwnPunch(req.auth!.user_id, before.rows[0].user_id)) {
+      return { ok: false, status: 403, error: SELF_PUNCH_BLOCKED_MESSAGE };
+    }
     const updates: string[] = [];
     const params: any[] = [];
     if (patch.ts) {
@@ -1206,6 +1212,10 @@ router.delete('/punches/:id', async (req, res) => {
     if (before.rowCount === 0) {
       return { ok: false, status: 404, error: 'Not found' };
     }
+    // Segregation of duties — no deleting your own punches. (See punchGuard.ts.)
+    if (isOwnPunch(req.auth!.user_id, before.rows[0].user_id)) {
+      return { ok: false, status: 403, error: SELF_PUNCH_BLOCKED_MESSAGE };
+    }
     await client.query(`DELETE FROM timeclock.punches WHERE id = $1`, [id]);
     await client.query(
       `INSERT INTO timeclock.audit_log
@@ -1239,6 +1249,12 @@ router.post('/punches', async (req, res) => {
     return;
   }
   const data = parsed.data;
+  // Segregation of duties — no inserting punches onto your own timecard.
+  // (See punchGuard.ts.)
+  if (isOwnPunch(req.auth!.user_id, data.user_id)) {
+    res.status(403).json({ error: SELF_PUNCH_BLOCKED_MESSAGE });
+    return;
+  }
   const punch = await withTransaction(async (client) => {
     const inserted = await recordPunch({
       userId: data.user_id,
