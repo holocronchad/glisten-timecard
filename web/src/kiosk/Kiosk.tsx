@@ -248,9 +248,9 @@ export default function Kiosk() {
     const skipGps = lookup.bypass_geofence === true;
 
     // GPS not yet ready (and we need it) — try ONE more time before
-    // failing the click. Previously we bounced straight to the PIN screen
-    // with a vague error; that swallowed legitimate clicks if GPS was
-    // mid-acquisition.
+    // proceeding. If GPS is still unavailable/denied, fall through without
+    // coords: the server's IP allowlist accepts office-WiFi punches even
+    // without GPS, so we let the server decide rather than blocking client-side.
     let punchCoords = coords;
     if (!skipGps && !punchCoords) {
       setPhase({ kind: 'punching', pin, type });
@@ -259,15 +259,9 @@ export default function Kiosk() {
         punchCoords = r.coords;
         setCoords(r.coords);
         setGpsState('ready');
-      } else {
-        setError(
-          r.reason === 'denied'
-            ? 'Location access blocked — tap the lock icon in your address bar → allow location, then try again.'
-            : "Couldn't get your location — make sure WiFi is on and try again.",
-        );
-        setPhase({ kind: 'name', pin, lookup }); // stay on the buttons screen
-        return;
       }
+      // GPS failed — proceed with null coords. Server accepts via IP allowlist
+      // when on office WiFi; returns 403 "not at a Glisten office" otherwise.
     }
 
     setPhase({ kind: 'punching', pin, type });
