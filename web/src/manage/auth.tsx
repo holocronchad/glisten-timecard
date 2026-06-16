@@ -12,6 +12,7 @@ type AuthCtx = {
   token: string | null;
   user: ManagerUser | null;
   expired: boolean;
+  ready: boolean;
   setSession: (token: string, user: ManagerUser) => void;
   clear: () => void;
 };
@@ -23,6 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<ManagerUser | null>(null);
   const [expired, setExpired] = useState(false);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     try {
@@ -34,6 +36,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     } catch {
       /* ignore */
+    } finally {
+      setReady(true);
     }
   }, []);
 
@@ -56,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <Ctx.Provider value={{ token, user, expired, setSession, clear }}>{children}</Ctx.Provider>
+    <Ctx.Provider value={{ token, user, expired, ready, setSession, clear }}>{children}</Ctx.Provider>
   );
 }
 

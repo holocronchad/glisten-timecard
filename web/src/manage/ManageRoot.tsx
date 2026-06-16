@@ -47,7 +47,8 @@ function ManageRoutes() {
 }
 
 function RequireAuth() {
-  const { token } = useAuth();
+  const { token, ready } = useAuth();
+  if (!ready) return null;
   if (!token) return <Navigate to="/manage/login" replace />;
   return <Outlet />;
 }
