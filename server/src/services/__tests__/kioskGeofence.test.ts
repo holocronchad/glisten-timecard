@@ -34,7 +34,10 @@ describe('resolveKioskGeofence', () => {
     }
   });
 
-  it('NEW — desktop fix: NO coords + office IP match → accepted (not 400), flagged', () => {
+  it('Desktop kiosk: NO coords + office IP match → accepted, NOT flagged (clean punch)', () => {
+    // Fixed front-desk desktops have no GPS hardware — no coords is normal,
+    // not suspicious. Office IP is sufficient evidence of presence.
+    // Flagging these flooded the review queue with noise on every punch.
     const r = resolveKioskGeofence({
       punchType: 'clock_in',
       hasCoords: false,
@@ -46,8 +49,8 @@ describe('resolveKioskGeofence', () => {
     expect(r.kind).toBe('office');
     if (r.kind === 'office') {
       expect(r.officeId).toBe(2);
-      expect(r.flagged).toBe(true);
-      expect(r.reason).toContain('no GPS coords provided');
+      expect(r.flagged).toBe(false);
+      expect(r.reason).toBeNull();
     }
   });
 

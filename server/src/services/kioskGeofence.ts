@@ -54,14 +54,21 @@ export function resolveKioskGeofence(args: {
   }
 
   // Path 3: kiosk IP allowlist — works with or without coords.
+  //
+  // Only flag when GPS was *present but outside* the fence — that's the case
+  // worth a manager's attention (device was somewhere unexpected). When no
+  // coords arrive at all the punch is from a fixed front-desk desktop that
+  // has no GPS hardware; flagging every one of those floods the review queue
+  // with noise and trains staff to ignore flags entirely.
   if (ipMatchOfficeId != null) {
     return {
       kind: 'office',
       officeId: ipMatchOfficeId,
-      flagged: true,
-      reason:
-        `ip_allowlist: client IP ${clientIp ?? 'unknown'} matched office ${ipMatchOfficeId} ` +
-        `kiosk allowlist (${hasCoords ? `GPS at ${punchType} was outside fence` : 'no GPS coords provided'}).`,
+      flagged: hasCoords,
+      reason: hasCoords
+        ? `ip_allowlist: client IP ${clientIp ?? 'unknown'} matched office ${ipMatchOfficeId} ` +
+          `kiosk allowlist (GPS at ${punchType} was outside fence).`
+        : null,
     };
   }
 
