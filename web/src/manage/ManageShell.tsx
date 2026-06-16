@@ -10,7 +10,7 @@ const TABS = [
   { to: 'today', label: 'Today' },
   { to: 'pending', label: 'Pending', badge: 'pending' },
   { to: 'lunch-review', label: 'Lunch review', badge: 'lunch' },
-  { to: 'missed', label: 'Missed' },
+  { to: 'missed', label: 'Missed', badge: 'missed' },
   { to: 'period', label: 'Pay period' },
   { to: 'punches', label: 'Punches' },
   { to: 'staff', label: 'Staff', ownerOnly: false },
@@ -23,6 +23,7 @@ export default function ManageShell({ children }: { children?: ReactNode }) {
   const nav = useNavigate();
   const [pendingCount, setPendingCount] = useState(0);
   const [lunchReviewCount, setLunchReviewCount] = useState(0);
+  const [missedCount, setMissedCount] = useState(0);
   const [addHoursOpen, setAddHoursOpen] = useState(false);
   const [addHoursNonce, setAddHoursNonce] = useState(0);
 
@@ -41,12 +42,14 @@ export default function ManageShell({ children }: { children?: ReactNode }) {
         const r = await api<{
           pending_count: number;
           lunch_review_count?: number;
+          missed_count?: number;
         }>('/manage/today', {
           token: token ?? undefined,
         });
         if (!cancelled) {
           setPendingCount(r.pending_count ?? 0);
           setLunchReviewCount(r.lunch_review_count ?? 0);
+          setMissedCount(r.missed_count ?? 0);
         }
       } catch {
         /* ignore */
@@ -92,6 +95,11 @@ export default function ManageShell({ children }: { children?: ReactNode }) {
                 {(t as any).badge === 'lunch' && lunchReviewCount > 0 && (
                   <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-rose-300 text-ink text-[10px] font-bold tabular-nums">
                     {lunchReviewCount}
+                  </span>
+                )}
+                {(t as any).badge === 'missed' && missedCount > 0 && (
+                  <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-amber-300 text-ink text-[10px] font-bold tabular-nums">
+                    {missedCount}
                   </span>
                 )}
               </NavLink>

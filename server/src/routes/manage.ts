@@ -515,11 +515,17 @@ router.get('/today', async (req, res) => {
   const { rows: lunchRows } = await query<{ count: string }>(lunchCountSql, lunchCountParams);
   const lunch_review_count = parseInt(lunchRows[0]?.count ?? '0', 10);
 
+  const { rows: missedRows } = await query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM timeclock.missed_punch_requests WHERE status = 'pending'`,
+  );
+  const missed_count = parseInt(missedRows[0]?.count ?? '0', 10);
+
   res.json({
     today,
     employees: out,
     pending_count: users.filter((u) => !u.approved).length,
     lunch_review_count,
+    missed_count,
   });
 });
 
