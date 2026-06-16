@@ -997,10 +997,17 @@ router.get('/employees/:id', async (req, res) => {
     const userPeriodNow = await periodForUser(id);
     const periodLocationId =
       userPeriodNow?.locationId ?? (await defaultLocationId());
-    const p =
-      idxRaw !== undefined && /^-?\d+$/.test(idxRaw)
-        ? await periodByIndexForLocation(periodLocationId, parseInt(idxRaw, 10))
-        : await periodForLocation(periodLocationId, new Date());
+    const p = await (async () => {
+      if (idxRaw !== undefined && /^-?\d+$/.test(idxRaw)) {
+        try {
+          return await periodByIndexForLocation(periodLocationId, parseInt(idxRaw, 10));
+        } catch {
+          // A biweekly index forwarded to a semi-monthly location (or vice versa)
+          // produces year=0 → Invalid Date → RangeError. Fall back silently.
+        }
+      }
+      return periodForLocation(periodLocationId, new Date());
+    })();
     period = { start: p.start, end: p.end, label: p.label, index: p.index };
   }
 

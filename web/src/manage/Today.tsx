@@ -76,13 +76,13 @@ export default function Today() {
     let cancelled = false;
     async function load() {
       try {
-        const [r, b] = await Promise.all([
+        const [r, b] = await Promise.allSettled([
           api<TodayResponse>('/manage/today', { token: token ?? undefined }),
           api<BriefResponse>('/manage/brief', { token: token ?? undefined }),
         ]);
         if (!cancelled) {
-          setData(r);
-          setBrief(b);
+          if (r.status === 'fulfilled') setData(r.value);
+          if (b.status === 'fulfilled') setBrief(b.value);
         }
       } finally {
         if (!cancelled) setLoading(false);
