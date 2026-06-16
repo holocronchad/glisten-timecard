@@ -1,5 +1,4 @@
-import { Routes, Route, Navigate, Outlet, useNavigate } from 'react-router-dom';
-import { useEffect } from 'react';
+import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth';
 import Login from './Login';
 import ManageShell from './ManageShell';
@@ -49,10 +48,6 @@ function ManageRoutes() {
 
 function RequireAuth() {
   const { token } = useAuth();
-  const nav = useNavigate();
-  useEffect(() => {
-    if (!token) nav('/manage/login', { replace: true });
-  }, [token, nav]);
-  if (!token) return null;
+  if (!token) return <Navigate to="/manage/login" replace />;
   return <Outlet />;
 }

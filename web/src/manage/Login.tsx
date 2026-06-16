@@ -12,7 +12,7 @@ type LoginResponse = {
 };
 
 export default function Login() {
-  const { setSession } = useAuth();
+  const { setSession, expired } = useAuth();
   const nav = useNavigate();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -77,9 +77,15 @@ export default function Login() {
             <h1 className="text-[34px] sm:text-[48px] leading-[1.05] tracking-tight font-light">
               Manager <span className="font-serif italic text-cream">sign in</span>
             </h1>
-            <p className="mt-1 text-creamSoft/50 text-sm">
-              Enter your 4-digit manager PIN.
-            </p>
+            {expired ? (
+              <p className="mt-1 text-amber-300/90 text-sm">
+                Session expired — please sign in again.
+              </p>
+            ) : (
+              <p className="mt-1 text-creamSoft/50 text-sm">
+                Enter your 4-digit manager PIN.
+              </p>
+            )}
           </div>
 
           <PinPad

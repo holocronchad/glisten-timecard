@@ -11,6 +11,7 @@ type ManagerUser = {
 type AuthCtx = {
   token: string | null;
   user: ManagerUser | null;
+  expired: boolean;
   setSession: (token: string, user: ManagerUser) => void;
   clear: () => void;
 };
@@ -21,6 +22,7 @@ const STORAGE_KEY = 'glisten-timecard-manager';
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<ManagerUser | null>(null);
+  const [expired, setExpired] = useState(false);
 
   useEffect(() => {
     try {
@@ -36,6 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   function setSession(t: string, u: ManagerUser) {
+    setExpired(false);
     setToken(t);
     setUser(u);
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ token: t, user: u }));
@@ -47,13 +50,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    const handler = () => clear();
+    const handler = () => { setExpired(true); clear(); };
     window.addEventListener(AUTH_EXPIRED_EVENT, handler);
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handler);
   }, []);
 
   return (
-    <Ctx.Provider value={{ token, user, setSession, clear }}>{children}</Ctx.Provider>
+    <Ctx.Provider value={{ token, user, expired, setSession, clear }}>{children}</Ctx.Provider>
   );
 }
 
