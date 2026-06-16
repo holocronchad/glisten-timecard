@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, X, ShieldCheck } from 'lucide-react';
 import { api, ApiError } from '../shared/api';
@@ -91,7 +92,13 @@ export default function Staff() {
                     r.active ? 'text-creamSoft' : 'text-creamSoft/40 line-through',
                   ].join(' ')}
                 >
-                  {r.name}
+                  <Link
+                    to={`/manage/employees/${r.id}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="hover:text-cream transition-colors underline-offset-2 hover:underline"
+                  >
+                    {r.name}
+                  </Link>
                   {r.is_owner && (
                     <span className="font-serif italic text-cream/80 ml-2 text-sm">owner</span>
                   )}
