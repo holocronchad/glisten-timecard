@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
-import { CheckCircle2, X } from 'lucide-react';
-import { api, ApiError } from '../shared/api';
+import { motion, AnimatePresence } from 'framer-motion';
+import { CheckCircle2, Check, X } from 'lucide-react';
+import { api, ApiError, PunchType } from '../shared/api';
 import { useAuth } from './auth';
 import { ListSkeleton } from './Skeleton';
 import { useToast } from '../shared/toast';
+import { PUNCH_LABEL, punchTextClass } from '../shared/punchType';
 
 type PendingUser = {
   id: number;
@@ -18,24 +19,34 @@ type PendingUser = {
   last_punch_at: string | null;
 };
 
-type PendingResponse = { pending: PendingUser[] };
+type MissedRequest = {
+  id: number;
+  user_id: number;
+  user_name: string;
+  type: string;
+  proposed_ts: string;
+  reason: string;
+  location_id: number | null;
+  created_at: string;
+};
 
 export default function Pending() {
   const { token } = useAuth();
   const { toast } = useToast();
-  const [data, setData] = useState<PendingUser[] | null>(null);
+  const [users, setUsers] = useState<PendingUser[] | null>(null);
+  const [missed, setMissed] = useState<MissedRequest[] | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busyIds, setBusyIds] = useState<Set<number>>(new Set());
+  const [busyUserIds, setBusyUserIds] = useState<Set<number>>(new Set());
+  const [busyMissedId, setBusyMissedId] = useState<number | null>(null);
 
   async function load() {
-    try {
-      const r = await api<PendingResponse>('/manage/pending', {
-        token: token ?? undefined,
-      });
-      setData(r.pending);
-    } finally {
-      setLoading(false);
-    }
+    const [usersRes, missedRes] = await Promise.allSettled([
+      api<{ pending: PendingUser[] }>('/manage/pending', { token: token ?? undefined }),
+      api<{ requests: MissedRequest[] }>('/manage/missed', { token: token ?? undefined }),
+    ]);
+    if (usersRes.status === 'fulfilled') setUsers(usersRes.value.pending);
+    if (missedRes.status === 'fulfilled') setMissed(missedRes.value.requests);
+    setLoading(false);
   }
 
   useEffect(() => {
@@ -55,8 +66,8 @@ export default function Pending() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  async function decide(id: number, decision: 'approve' | 'deny') {
-    setBusyIds((s) => new Set(s).add(id));
+  async function decideUser(id: number, decision: 'approve' | 'deny') {
+    setBusyUserIds((s) => new Set(s).add(id));
     try {
       await api(`/manage/users/${id}/${decision}`, {
         method: 'POST',
@@ -64,17 +75,36 @@ export default function Pending() {
         token: token ?? undefined,
       });
       toast(decision === 'approve' ? 'Approved.' : 'Denied.');
-      setData((d) => (d ? d.filter((u) => u.id !== id) : d));
+      setUsers((d) => (d ? d.filter((u) => u.id !== id) : d));
     } catch (e) {
       toast(e instanceof ApiError ? e.message : 'Action failed', 'error');
     } finally {
-      setBusyIds((s) => {
+      setBusyUserIds((s) => {
         const n = new Set(s);
         n.delete(id);
         return n;
       });
     }
   }
+
+  async function decideMissed(id: number, decision: 'approve' | 'deny') {
+    setBusyMissedId(id);
+    try {
+      await api(`/manage/missed/${id}/decide`, {
+        method: 'POST',
+        body: { decision },
+        token: token ?? undefined,
+      });
+      toast(decision === 'approve' ? 'Approved — punch inserted.' : 'Request denied.');
+      setMissed((d) => (d ? d.filter((r) => r.id !== id) : d));
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : 'Action failed', 'error');
+    } finally {
+      setBusyMissedId(null);
+    }
+  }
+
+  const totalPending = (users?.length ?? 0) + (missed?.length ?? 0);
 
   return (
     <div>
@@ -83,21 +113,91 @@ export default function Pending() {
           <span className="font-serif italic text-cream">Pending</span> approvals
         </h1>
         <p className="text-creamSoft/40 text-sm mt-1">
-          New employees who registered themselves at the kiosk. Their punches are
-          recorded but excluded from payroll until approved.
+          Everything waiting on your decision.
         </p>
       </div>
 
-      <div className="mt-8 rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40">
-        {loading && !data ? (
+      {/* ── Missed punch requests ────────────────────────────── */}
+      <h2 className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
+        Missed punch requests
+      </h2>
+      <div className="rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40">
+        {loading && !missed ? (
+          <ListSkeleton rows={4} />
+        ) : !missed || missed.length === 0 ? (
+          <div className="p-10 text-creamSoft/40 text-sm">All caught up.</div>
+        ) : (
+          <ul className="divide-y divide-creamSoft/5">
+            <AnimatePresence initial={false}>
+              {missed.map((r) => (
+                <motion.li
+                  key={r.id}
+                  layout
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8, height: 0 }}
+                  transition={{ duration: 0.3 }}
+                  className="p-5 flex flex-col sm:flex-row sm:items-center gap-4"
+                >
+                  <div className="flex-1">
+                    <div className="text-creamSoft text-base tracking-tight">
+                      {r.user_name}
+                    </div>
+                    <div className="text-sm mt-0.5">
+                      <span className={`font-medium ${punchTextClass(r.type as PunchType)}`}>
+                        {PUNCH_LABEL[r.type as PunchType]}
+                      </span>
+                      <span className="text-creamSoft/60"> · </span>
+                      <span className="text-creamSoft/60 tabular-nums">
+                        {formatDateTime(r.proposed_ts)}
+                      </span>
+                      {r.location_id == null && (
+                        <span className="text-sky-300/80 ml-2 text-xs uppercase tracking-[0.14em]">
+                          · WFH rate
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-creamSoft/50 text-sm mt-2 italic">
+                      "{r.reason}"
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      disabled={busyMissedId === r.id}
+                      onClick={() => decideMissed(r.id, 'deny')}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-creamSoft/15 hover:bg-creamSoft/5 text-creamSoft/80 px-4 py-2 text-sm tracking-tight disabled:opacity-50"
+                    >
+                      <X size={14} /> Deny
+                    </button>
+                    <button
+                      disabled={busyMissedId === r.id}
+                      onClick={() => decideMissed(r.id, 'approve')}
+                      className="inline-flex items-center gap-1.5 rounded-full bg-cream text-ink px-4 py-2 text-sm tracking-tight disabled:opacity-50"
+                    >
+                      <Check size={14} /> Approve
+                    </button>
+                  </div>
+                </motion.li>
+              ))}
+            </AnimatePresence>
+          </ul>
+        )}
+      </div>
+
+      {/* ── New staff registrations ──────────────────────────── */}
+      <h2 className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase mt-10 mb-3">
+        New staff registrations
+      </h2>
+      <div className="rounded-3xl border border-creamSoft/10 overflow-hidden bg-graphite/40">
+        {loading && !users ? (
           <ListSkeleton rows={3} />
-        ) : !data || data.length === 0 ? (
+        ) : !users || users.length === 0 ? (
           <div className="p-10 text-creamSoft/40 text-sm">
-            No one is waiting on approval right now.
+            No new self-registrations.
           </div>
         ) : (
           <div className="divide-y divide-creamSoft/5">
-            {data.map((u, i) => (
+            {users.map((u, i) => (
               <motion.div
                 key={u.id}
                 initial={{ opacity: 0, y: 8 }}
@@ -128,16 +228,16 @@ export default function Pending() {
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => decide(u.id, 'deny')}
-                    disabled={busyIds.has(u.id)}
+                    onClick={() => decideUser(u.id, 'deny')}
+                    disabled={busyUserIds.has(u.id)}
                     className="rounded-full px-4 py-2 text-creamSoft/60 hover:text-rose-300 text-sm tracking-tight border border-creamSoft/15 hover:border-rose-300/40 transition-colors disabled:opacity-30 inline-flex items-center gap-2"
                   >
                     <X size={14} /> Deny
                   </button>
                   <button
                     type="button"
-                    onClick={() => decide(u.id, 'approve')}
-                    disabled={busyIds.has(u.id)}
+                    onClick={() => decideUser(u.id, 'approve')}
+                    disabled={busyUserIds.has(u.id)}
                     className="rounded-full px-4 py-2 bg-cream text-ink text-sm tracking-tight font-bold disabled:opacity-30 inline-flex items-center gap-2"
                   >
                     <CheckCircle2 size={14} /> Approve
@@ -148,6 +248,12 @@ export default function Pending() {
           </div>
         )}
       </div>
+
+      {!loading && totalPending === 0 && (
+        <p className="mt-8 text-creamSoft/30 text-sm text-center">
+          All clear — nothing waiting for approval.
+        </p>
+      )}
     </div>
   );
 }
@@ -178,5 +284,17 @@ function formatDate(iso: string): string {
     day: 'numeric',
     year: 'numeric',
     timeZone: 'UTC',
+  });
+}
+
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/Phoenix',
   });
 }
