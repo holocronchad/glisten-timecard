@@ -30,7 +30,12 @@ export async function runAutoClose(now: Date = new Date()): Promise<{ closed: nu
     [new Date(now.getTime() - 36 * 60 * 60 * 1000)],
   );
 
-  const open = rows.filter((r) => r.type === 'clock_in' || r.type === 'lunch_start');
+  // lunch_end is also an open state — the employee came back from lunch but
+  // never clocked out. Without this, a user who forgets to punch out after
+  // lunch is invisible to autoClose and accrues hours indefinitely.
+  const open = rows.filter(
+    (r) => r.type === 'clock_in' || r.type === 'lunch_start' || r.type === 'lunch_end',
+  );
   let closed = 0;
 
   for (const o of open) {
@@ -40,7 +45,7 @@ export async function runAutoClose(now: Date = new Date()): Promise<{ closed: nu
     const ts = fallback < cap ? fallback : cap;
 
     const closeType: 'clock_out' | 'lunch_end' =
-      o.type === 'clock_in' ? 'clock_out' : 'lunch_end';
+      o.type === 'clock_in' || o.type === 'lunch_end' ? 'clock_out' : 'lunch_end';
 
     const wrote = await withTransaction<boolean>(async (client) => {
       // Take the same per-user advisory lock the kiosk punch handler uses,
@@ -54,7 +59,7 @@ export async function runAutoClose(now: Date = new Date()): Promise<{ closed: nu
       const latest = await getLatestPunch(o.user_id, client);
       if (
         !latest ||
-        (latest.type !== 'clock_in' && latest.type !== 'lunch_start')
+        (latest.type !== 'clock_in' && latest.type !== 'lunch_start' && latest.type !== 'lunch_end')
       ) {
         // User already closed via kiosk between the row scan and now —
         // skip. Common when the cron fires at 6:59 AM and the early
