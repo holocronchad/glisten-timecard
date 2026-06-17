@@ -112,6 +112,11 @@ export default function Period() {
     setIndex(data.period.index + delta);
   }
 
+  function selectLocation(id: number | null) {
+    setIndex(null); // each location has its own index space; never carry a biweekly index into semi-monthly (or vice versa)
+    setLocationId(id);
+  }
+
   async function signPeriod() {
     if (!data || !user?.is_owner || signing) return;
     const totalMin = data.employees.reduce((acc, e) => acc + e.total_minutes, 0);
@@ -228,7 +233,7 @@ export default function Period() {
             Office
           </span>
           <button
-            onClick={() => setLocationId(null)}
+            onClick={() => selectLocation(null)}
             className={`px-3.5 py-1.5 rounded-full text-xs tracking-tight transition-colors ${
               locationId === null
                 ? 'bg-cream text-ink'
@@ -240,7 +245,7 @@ export default function Period() {
           {locations.map((loc) => (
             <button
               key={loc.id}
-              onClick={() => setLocationId(loc.id)}
+              onClick={() => selectLocation(loc.id)}
               className={`px-3.5 py-1.5 rounded-full text-xs tracking-tight transition-colors ${
                 locationId === loc.id
                   ? 'bg-cream text-ink'
