@@ -299,6 +299,27 @@ export async function periodForLocation(
     : semiMonthlyPeriodForDate(schedule, date, tz);
 }
 
+/**
+ * Clamp a requested pay-period index for the employee self-service pager (/me).
+ *
+ * Staff page BACKWARD through prior pay periods to total their hours for the
+ * period they're actually getting paid for (Mesha's request, 2026-06-16), but
+ * must never land on a FUTURE period: there are no punches in the future, so a
+ * "next" past the current period would only ever render an empty, confusing
+ * screen. Returns the current index when nothing specific is requested.
+ *
+ * Works for both cadences because both index encodings are strictly monotonic
+ * in time (biweekly: small offsets; semi-monthly: year*24+... ), so "no later
+ * than now" is exactly `Math.min(requested, current)`.
+ */
+export function clampMePeriodIndex(
+  currentIndex: number,
+  requested: number | undefined,
+): number {
+  if (requested === undefined || !Number.isFinite(requested)) return currentIndex;
+  return Math.min(Math.trunc(requested), currentIndex);
+}
+
 /** Period at a specific index for a location. Index semantics depend on schedule type. */
 export async function periodByIndexForLocation(
   locationId: number,

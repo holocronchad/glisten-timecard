@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Flag } from 'lucide-react';
+import { Flag, ChevronLeft, ChevronRight } from 'lucide-react';
 import PinPad from '../kiosk/PinPad';
 import CloudBackground from '../kiosk/CloudBackground';
 import { api, ApiError, NetworkError, PunchType } from '../shared/api';
@@ -16,6 +16,15 @@ import { punchTextClass } from '../shared/punchType';
 
 type MeResponse = {
   user: { id: number; name: string };
+  // null when the employee has no scheduled home office → rolling 14-day
+  // window, no pager. Otherwise the selected pay period; drives the pager.
+  period: {
+    index: number;
+    start: string;
+    end: string;
+    label: string;
+    is_current: boolean;
+  } | null;
   punches: Array<{
     id: number;
     location_id: number | null;
@@ -38,19 +47,31 @@ const TYPE_LABEL: Record<PunchType, string> = {
 };
 
 export default function Me() {
+  // PIN is held in memory for the session so we can re-query when the employee
+  // pages to a different pay period. Cleared on sign-out; never persisted.
+  const [pin, setPin] = useState<string | null>(null);
   const [data, setData] = useState<MeResponse | null>(null);
   const [shake, setShake] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [paging, setPaging] = useState(false);
 
-  async function lookup(pin: string) {
+  function fetchHours(pinVal: string, periodIndex?: number) {
+    return api<MeResponse>('/kiosk/me', {
+      method: 'POST',
+      body:
+        periodIndex === undefined
+          ? { pin: pinVal }
+          : { pin: pinVal, period_index: periodIndex },
+    });
+  }
+
+  async function lookup(pinVal: string) {
     setBusy(true);
     setErr(null);
     try {
-      const r = await api<MeResponse>('/kiosk/me', {
-        method: 'POST',
-        body: { pin },
-      });
+      const r = await fetchHours(pinVal);
+      setPin(pinVal);
       setData(r);
     } catch (e) {
       const msg =
@@ -68,8 +89,34 @@ export default function Me() {
     }
   }
 
+  async function gotoPeriod(periodIndex: number) {
+    if (!pin || paging) return;
+    setPaging(true);
+    try {
+      const r = await fetchHours(pin, periodIndex);
+      setData(r);
+    } catch {
+      // Non-fatal: keep the current period visible if a page fetch fails.
+    } finally {
+      setPaging(false);
+    }
+  }
+
+  function signOut() {
+    setPin(null);
+    setData(null);
+  }
+
   if (!data) return <PinScreen onPin={lookup} shake={shake} err={err} busy={busy} />;
-  return <Hours data={data} onSignOut={() => setData(null)} />;
+  return (
+    <Hours
+      data={data}
+      paging={paging}
+      onSignOut={signOut}
+      onPrev={() => data.period && gotoPeriod(data.period.index - 1)}
+      onNext={() => data.period && gotoPeriod(data.period.index + 1)}
+    />
+  );
 }
 
 function PinScreen({
@@ -111,7 +158,7 @@ function PinScreen({
               Your <span className="font-serif italic text-cream">hours</span>
             </motion.h1>
             <p className="mt-3 text-creamSoft/50 text-base">
-              Enter your PIN to see your last two weeks.
+              Enter your PIN to see your hours by pay period.
             </p>
           </div>
 
@@ -133,12 +180,22 @@ function PinScreen({
 
 function Hours({
   data,
+  paging,
   onSignOut,
+  onPrev,
+  onNext,
 }: {
   data: MeResponse;
+  paging: boolean;
   onSignOut: () => void;
+  onPrev: () => void;
+  onNext: () => void;
 }) {
   const first = data.user.name.split(' ')[0];
+  // No period (employee without a scheduled home office) → legacy rolling
+  // 14-day view, "This week" still applies. A past pay period has no
+  // meaningful "this week", so that card is hidden when paged back.
+  const isCurrent = data.period?.is_current ?? true;
   // /me intentionally never receives the lunch_review_deduction_seconds
   // column from the server, so every segment is deduction=0 and totals
   // here render as RAW worked time. Employees do not see deductions.
@@ -185,14 +242,45 @@ function Hours({
           <span className="font-serif italic text-cream">{first}</span>
         </motion.h1>
 
-        <div className="mt-8 grid grid-cols-2 gap-3">
+        {data.period && (
+          <div className="mt-8 flex items-center gap-3">
+            <button
+              onClick={onPrev}
+              disabled={paging}
+              aria-label="Previous pay period"
+              className="h-10 w-10 rounded-full border border-creamSoft/15 hover:bg-creamSoft/5 flex items-center justify-center disabled:opacity-40 transition-colors"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <div className="flex-1 text-center">
+              <div className="text-creamSoft/40 text-[10px] tracking-[0.2em] uppercase">
+                Pay period
+              </div>
+              <div className={`text-cream text-sm tabular-nums tracking-tight transition-opacity ${paging ? 'opacity-40' : ''}`}>
+                {data.period.label}
+              </div>
+            </div>
+            <button
+              onClick={onNext}
+              disabled={paging || data.period.is_current}
+              aria-label="Next pay period"
+              className="h-10 w-10 rounded-full border border-creamSoft/15 hover:bg-creamSoft/5 flex items-center justify-center disabled:opacity-40 transition-colors"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        )}
+
+        <div className={`${data.period ? 'mt-4' : 'mt-8'} grid gap-3 ${isCurrent ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          {isCurrent && (
+            <Stat
+              label="This week"
+              value={hhmm(weekTotalsMinutes)}
+              split={showSplit ? weekSplit : null}
+            />
+          )}
           <Stat
-            label="This week"
-            value={hhmm(weekTotalsMinutes)}
-            split={showSplit ? weekSplit : null}
-          />
-          <Stat
-            label="Last 14 days"
+            label={data.period ? (isCurrent ? 'This period' : 'Period total') : 'Last 14 days'}
             value={hhmm(periodTotalMinutes)}
             split={showSplit ? periodSplit : null}
           />

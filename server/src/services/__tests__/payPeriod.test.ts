@@ -22,6 +22,7 @@ import {
   semiMonthlyPeriodAtIndex,
   semiMonthlyEncode,
   semiMonthlyDecode,
+  clampMePeriodIndex,
   type PaySchedule,
 } from '../payPeriod';
 
@@ -253,6 +254,38 @@ describe('semi-monthly index encoding', () => {
     const dec2 = semiMonthlyEncode(2026, 12, 1);
     const jan1 = semiMonthlyEncode(2027, 1, 0);
     expect(jan1 - dec2).toBe(1);
+  });
+});
+
+describe('clampMePeriodIndex — employee self-service paging', () => {
+  // Drives the /me pay-period pager (Mesha's request 2026-06-16): staff page
+  // BACKWARD through prior pay periods to total their hours, but must never
+  // land on a FUTURE period (always empty — no punches exist in the future).
+
+  it('returns the current index when nothing is requested', () => {
+    expect(clampMePeriodIndex(48648, undefined)).toBe(48648);
+    expect(clampMePeriodIndex(5, undefined)).toBe(5);
+  });
+
+  it('allows paging backward into prior periods', () => {
+    expect(clampMePeriodIndex(48648, 48647)).toBe(48647); // semi-monthly prev
+    expect(clampMePeriodIndex(5, 4)).toBe(4);             // biweekly prev
+    expect(clampMePeriodIndex(5, 0)).toBe(0);             // far back
+  });
+
+  it('clamps a future request down to the current period', () => {
+    expect(clampMePeriodIndex(48648, 48649)).toBe(48648); // can't go past now
+    expect(clampMePeriodIndex(5, 99)).toBe(5);
+  });
+
+  it('keeps the current period when current is requested exactly', () => {
+    expect(clampMePeriodIndex(48648, 48648)).toBe(48648);
+  });
+
+  it('ignores non-finite / non-integer noise by trunc + clamp', () => {
+    expect(clampMePeriodIndex(5, Number.NaN)).toBe(5);
+    expect(clampMePeriodIndex(5, Infinity)).toBe(5);
+    expect(clampMePeriodIndex(5, 3.9)).toBe(3); // trunc toward zero
   });
 });
 

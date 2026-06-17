@@ -24,6 +24,11 @@ import {
 } from '../services/punches';
 import { cprDaysUntil } from '../services/cpr';
 import { matchRoster, type RosterCandidate } from '../services/nameMatch';
+import {
+  periodForLocation,
+  periodByIndexForLocation,
+  clampMePeriodIndex,
+} from '../services/payPeriod';
 import { query, withTransaction } from '../db';
 
 const router = Router();
@@ -909,7 +914,14 @@ router.post('/missed-punch', async (req, res) => {
 });
 
 // ── POST /kiosk/me ─────────────────────────────────────────────────────────
-const meSchema = z.object({ pin: z.string().regex(/^\d{4}$/) });
+// period_index (optional): page BACKWARD through prior pay periods so staff can
+// total the hours for the period they're actually getting paid for (Mesha's
+// request 2026-06-16). Omitted → current period. Index semantics are
+// per-schedule (see payPeriod.ts); the client just echoes back period.index ± 1.
+const meSchema = z.object({
+  pin: z.string().regex(/^\d{4}$/),
+  period_index: z.number().int().optional(),
+});
 
 router.post('/me', async (req, res) => {
   const parsed = meSchema.safeParse(req.body);
@@ -951,6 +963,49 @@ router.post('/me', async (req, res) => {
     ],
   ).catch(() => {});
 
+  // Resolve the punch window. Employees with a home office on a pay schedule
+  // get pay-period windowing (and can page backward via period_index, Mesha's
+  // request 2026-06-16); the period boundaries align exactly with payroll so
+  // "what I total here = what I'm paid for." Employees with no home office
+  // (no schedule applies) fall back to the original rolling 14-day window with
+  // no pager.
+  const { rows: homeRows } = await query<{ home_location_id: number | null }>(
+    `SELECT home_location_id FROM timeclock.users WHERE id = $1`,
+    [user.id],
+  );
+  const homeLocationId = homeRows[0]?.home_location_id ?? null;
+
+  let windowStart: Date | null = null;
+  let windowEnd: Date | null = null;
+  let period:
+    | { index: number; start: string; end: string; label: string; is_current: boolean }
+    | null = null;
+
+  if (homeLocationId !== null) {
+    try {
+      const current = await periodForLocation(homeLocationId);
+      const idx = clampMePeriodIndex(current.index, parsed.data.period_index);
+      const target =
+        idx === current.index
+          ? current
+          : await periodByIndexForLocation(homeLocationId, idx);
+      windowStart = target.start;
+      windowEnd = target.end;
+      period = {
+        index: target.index,
+        start: target.start.toISOString(),
+        end: target.end.toISOString(),
+        label: target.label,
+        is_current: target.index === current.index,
+      };
+    } catch {
+      // No schedule seeded for this location → fall through to 14-day window.
+      windowStart = null;
+      windowEnd = null;
+      period = null;
+    }
+  }
+
   // Employee self-service view: per Dr. Dawood (2026-05-20), do NOT leak
   // any lunch-review fields here — employees should not see the deduction,
   // not see that they were rejected, not see that their lunch was flagged.
@@ -959,13 +1014,22 @@ router.post('/me', async (req, res) => {
   // segment as deduction=0 → /me shows RAW hours. Payroll math
   // (manage routes + payroll CSV) still subtracts because those paths
   // fetch the column explicitly.
-  const { rows: punches } = await query(
-    `SELECT id, location_id, type, ts, flagged
-     FROM timeclock.punches
-     WHERE user_id = $1 AND ts >= NOW() - INTERVAL '14 days'
-     ORDER BY ts DESC`,
-    [user.id],
-  );
+  const { rows: punches } =
+    windowStart && windowEnd
+      ? await query(
+          `SELECT id, location_id, type, ts, flagged
+           FROM timeclock.punches
+           WHERE user_id = $1 AND ts >= $2 AND ts < $3
+           ORDER BY ts DESC`,
+          [user.id, windowStart, windowEnd],
+        )
+      : await query(
+          `SELECT id, location_id, type, ts, flagged
+           FROM timeclock.punches
+           WHERE user_id = $1 AND ts >= NOW() - INTERVAL '14 days'
+           ORDER BY ts DESC`,
+          [user.id],
+        );
 
   const { rows: locations } = await query(
     `SELECT id, name FROM timeclock.locations`,
@@ -975,6 +1039,9 @@ router.post('/me', async (req, res) => {
 
   res.json({
     user: { id: user.id, name: user.name, approved: user.approved },
+    // null when the employee has no scheduled home office (rolling 14-day
+    // window, no pager). Otherwise drives the /me pay-period pager.
+    period,
     punches: (punches as any[]).map((p) => ({
       ...p,
       location_name: p.location_id ? locName.get(p.location_id) ?? null : null,
