@@ -29,7 +29,10 @@ type StaffRow = {
   cpr_issued_at: string | null;
   cpr_expires_at: string | null;
   cpr_updated_at: string | null;
+  home_location_id: number | null;
 };
+
+type LocationOption = { id: number; name: string };
 
 export default function Staff() {
   const { token, user } = useAuth();
@@ -314,8 +317,17 @@ function EditStaffModal({
   const [cprOrg, setCprOrg] = useState(staff.cpr_org ?? '');
   const [cprIssued, setCprIssued] = useState(toDateInputValue(staff.cpr_issued_at));
   const [cprExpires, setCprExpires] = useState(toDateInputValue(staff.cpr_expires_at));
+  const [homeLocationId, setHomeLocationId] = useState<number | null>(staff.home_location_id);
+  const [locations, setLocations] = useState<LocationOption[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOwner) return;
+    api<{ locations: LocationOption[] }>('/manage/locations', { token: token ?? undefined })
+      .then((r) => setLocations(r.locations))
+      .catch(() => {});
+  }, [isOwner, token]);
 
   async function save() {
     setBusy(true);
@@ -401,6 +413,8 @@ function EditStaffModal({
         body.cpr_issued_at = allEmpty ? null : cprIssued;
         body.cpr_expires_at = allEmpty ? null : cprExpires;
       }
+
+      if (homeLocationId !== staff.home_location_id) body.home_location_id = homeLocationId;
 
       if (Object.keys(body).length === 1) {
         setErr('Nothing changed.');
@@ -500,6 +514,28 @@ function EditStaffModal({
                 />
                 Active
               </label>
+
+              {/* Home office — determines which pay schedule (biweekly vs
+                  semi-monthly) the employee's payroll runs on. */}
+              <div>
+                <label className="text-creamSoft/50 text-xs tracking-[0.18em] uppercase block mb-1.5">
+                  Home office
+                </label>
+                <select
+                  value={homeLocationId ?? ''}
+                  onChange={(e) =>
+                    setHomeLocationId(e.target.value === '' ? null : Number(e.target.value))
+                  }
+                  className="w-full rounded-xl bg-ink/60 border border-creamSoft/10 text-creamSoft text-sm px-3 py-2 focus:outline-none focus:border-creamSoft/30"
+                >
+                  <option value="">— None (uses system default) —</option>
+                  {locations.map((loc) => (
+                    <option key={loc.id} value={loc.id}>
+                      {loc.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
               {/* Pay rate — owner-only. Raises/cuts go here. Mirrors the
                   CPR-card grouping. WFH rate only matters for dual-PIN staff

@@ -1587,7 +1587,8 @@ router.get('/staff', requireManager, async (req, res) => {
   const { rows } = await query(
     `SELECT id, name, email, role, employment_type, pay_rate_cents, pay_rate_cents_remote,
             is_owner, is_manager, track_hours, active, last_login_at, created_at,
-            cpr_org, cpr_issued_at, cpr_expires_at, cpr_updated_at
+            cpr_org, cpr_issued_at, cpr_expires_at, cpr_updated_at,
+            home_location_id
      FROM timeclock.users
      ORDER BY active DESC, name ASC`,
   );
@@ -1708,6 +1709,7 @@ const patchStaffSchema = z.object({
   cpr_org: z.string().trim().min(1).max(120).nullable().optional(),
   cpr_issued_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   cpr_expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  home_location_id: z.number().int().positive().nullable().optional(),
   reason: z.string().min(1).max(500),
 });
 
@@ -1739,7 +1741,8 @@ router.patch('/staff/:id', requireManager, async (req, res) => {
       d.pay_rate_cents_remote !== undefined ||
       d.is_manager !== undefined ||
       d.track_hours !== undefined ||
-      d.active !== undefined;
+      d.active !== undefined ||
+      d.home_location_id !== undefined;
     if (ownerOnlyTouched) {
       res.status(403).json({
         error:
@@ -1763,6 +1766,7 @@ router.patch('/staff/:id', requireManager, async (req, res) => {
   if (d.is_manager !== undefined) add('is_manager', d.is_manager);
   if (d.track_hours !== undefined) add('track_hours', d.track_hours);
   if (d.active !== undefined) add('active', d.active);
+  if (d.home_location_id !== undefined) add('home_location_id', d.home_location_id);
   if (d.pin) add('pin_hash', await hashPin(d.pin));
 
   // CPR cert is atomic — accept all three (set) or all three null (clear).
